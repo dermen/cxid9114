@@ -1,4 +1,4 @@
-##D9114 instructions on CORI
+## D9114 instructions on CORI
 
 This is tested on SUSE linux:
 
@@ -11,7 +11,7 @@ Release:	15.0
 Codename:	n/a
 ```
 
-###STEP 1
+### STEP 1
 Download/install a copy of go language
 
 
@@ -22,7 +22,7 @@ wget https://dl.google.com/go/go1.12.7.linux-amd64.tar.gz
 tar -xzvf go1.12.7.linux-amd64.tar.gz
 export PATH=$PATH:~/install_go/go/bin
 ```
-###STEP 2
+### STEP 2
 Install git lfs (large file storage)
 
 ```
@@ -31,7 +31,7 @@ go get github.com/git-lfs/git-lfs
 export PATH=$PATH:~/go/bin
 ```
 
-###STEP 3
+### STEP 3
 Clone cxid9114 and bring in big files
 
 ```
@@ -80,7 +80,7 @@ cd ~/cxid9114/format
 dxtbx.install_format -u FormatBigSimD9114.py
 ```
 
-###Step 7
+### Step 7
 Access a CORI GPU node
 
 ```
