@@ -53,12 +53,12 @@ source ~/crystal/build/setpaths.sh
 Then link the cxid9114 repo to cctbx and configure it
 
 ```
-ln -s ~/cxid9114 ~/crystal/modules
+ln -s ~/cxid9114 ~/crystal/modules/cxid9114
 libtbx.configure cxid9114
 ```
 
 ### STEP 5
-Histogram the spectra from there raw format to a 1eV spacing:
+Histogram the spectra from their raw format to a 1eV spacing:
 
 ```
 cd ~/cxid9114/spec
