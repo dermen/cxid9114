@@ -23,9 +23,6 @@ if proc_spec_name in f:
 if energy_name in f:
     del f[energy_name]
 
-f.close()
-exit()
-
 # load the raw spec convert to float32 from float16
 raw_specs = f[raw_spec_path][()].astype(np.float32)
 Nspec_bins = raw_specs.shape[1]  # 1024

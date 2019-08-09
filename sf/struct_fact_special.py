@@ -74,14 +74,16 @@ def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_n
 
 
 def main():
-    en_chans = h5py.File("exper_spectra.h5", "r")["energy_bins"][()]  # energy channels from spectrometer
-    output_name = "exper_spectra_sfall.h5"  # output file name
+    en_chans = h5py.File("../spec/realspec.h5", "r")["energy_bins"][()]  # energy channels from spectrometer
+    output_name = "realspec_sfall.h5"  # output file name
     pdb_name='003_s0_mark0_001.pdb'  # refined pdb from sad data
-    yb_scatter_name = "scanned_fp_fdp.npz"  # calc fp from high-res fdp
+    yb_scatter_name = "scanned_fp_fdp.npz"  # high res fdp scan and corresponding calculated fp
 
     Fout = []
+    indices_prev = None  # for sanity check on miller arrays
     for i_en, en in enumerate(en_chans):
-        print i_en, len(en_chans)
+        if i_en % 10==0:
+            print ("Computing sf for energy channel %d / %d " %( i_en, len(en_chans)))
         wave = ENERGY_CONV / en
         F = sfgen(wave,
                   pdb_name,
@@ -89,8 +91,17 @@ def main():
                   dmin=1.5,
                   ano_flag=True,
                   yb_scatter_name=yb_scatter_name)
-        Fout.append(F.data().as_numpy_array())
-    hkl = F.indices()   # should be same hkl list for all channels
+        Fout.append(F.data().as_numpy_array())  # store structure factors in hdf5 format, needs numpy conversion
+        
+        # put in a sanity check on indices (same for all wavelengths ?)  
+        if indices_prev is None:
+            indices_prev = F.indices()
+            continue
+        assert( all(i==j for i,j in zip(F.indices(), indices_prev)))
+        indices_prev = F.indices()
+
+        indices = F.indices()
+    hkl = F.indices()   # at this point, should be same hkl list for all energy channels
     hkl = np.vstack([hkl[i] for i in range(len(hkl))])
     with h5py.File(output_name, "w") as h5_out:
         h5_out.create_dataset("indices", data=hkl, dtype=np.int, compression="lzf")
