@@ -62,7 +62,7 @@ Histogram the spectra from their raw format to a 1eV spacing:
 
 ```
 cd ~/cxid9114/spec
-libtbx.python hist_spec.h5
+libtbx.python hist_spec.py
 ```
 
 Compute structure factors for each energy channel in the histogrammed spectra:
