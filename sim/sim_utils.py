@@ -179,9 +179,9 @@ class PatternFactory:
     def adjust_dispersion(self, pct=0.):
         self.SIM2.dispersion_pct = pct
 
-    def primer(self, crystal, energy, fluence, F=None):
+    def primer(self, crystal, energy, flux, F=None):
         self.SIM2.wavelength_A = parameters.ENERGY_CONV / energy
-        self.SIM2.fluence = fluence
+        self.SIM2.flux = flux
         # order of things is important here, Amatrix needs to be set
         #   after Fhkl in current code!!
         if isinstance(F, cctbx.miller.array):

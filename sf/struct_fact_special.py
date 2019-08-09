@@ -74,10 +74,16 @@ def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_n
 
 
 def main():
-    en_chans = h5py.File("../spec/realspec.h5", "r")["energy_bins"][()]  # energy channels from spectrometer
-    output_name = "realspec_sfall.h5"  # output file name
-    pdb_name='003_s0_mark0_001.pdb'  # refined pdb from sad data
-    yb_scatter_name = "scanned_fp_fdp.npz"  # high res fdp scan and corresponding calculated fp
+    import os
+    sf_path = os.path.dirname(__file__)
+    spec_file = os.path.join(sf_path, "../spec/realspec.h5")
+    h5 = h5py.File(spec_file, "r")
+    assert("energy_bins" in h5.keys())
+    en_chans = h5["energy_bins"][()]  # energy channels from spectrometer
+    
+    output_name = os.path.join(sf_path, "realspec_sfall.h5")  # output file name
+    pdb_name= os.path.join( sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
+    yb_scatter_name = os.path.join( sf_path, "scanned_fp_fdp.npz")  # high res fdp scan and corresponding calculated fp
 
     Fout = []
     indices_prev = None  # for sanity check on miller arrays
@@ -125,7 +131,7 @@ def load_sfall(fname):
     data = f["data"][()]
     indices = f["indices"][()]
     hall = f["hall_symbol"][()]
-    ucell_param = f["ucell_tuple"][()]
+    ucell_param = tuple(f["ucell_tuple"][()])
     energies = f["energies"][()]
     sg = sgtbx.space_group(hall)
     Symm = crystal.symmetry(unit_cell=ucell_param, space_group=sg)

@@ -2,7 +2,6 @@
 import os
 import cPickle
 import numpy as np
-import h5py
 from dials.array_family import flex
 from dxtbx.imageset import MemReader #, MemMasker
 from dxtbx.datablock import DataBlockFactory
@@ -191,8 +190,6 @@ def is_outlier(points, thresh=3.5):
 def random_rotation(deflection=1.0, randnums=None):
     r"""
     Creates a random rotation matrix.
-
-    TODO: documentation
 
     Arguments:
         deflection (float): the magnitude of the rotation. For 0, no rotation; for 1, competely random

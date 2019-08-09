@@ -1,10 +1,9 @@
 
 import numpy as np
 import h5py
-import sys
+import os
 
-fname = "realspec.h5"
-raw_spec_path = "spectra"
+fname = os.path.join( os.path.dirname(__file__), "realspec.h5")
 f = h5py.File(fname, "r+")
 
 # normalize with this flux level
@@ -24,7 +23,7 @@ if energy_name in f:
     del f[energy_name]
 
 # load the raw spec convert to float32 from float16
-raw_specs = f[raw_spec_path][()].astype(np.float32)
+raw_specs = f["spectra"][()].astype(np.float32)
 Nspec_bins = raw_specs.shape[1]  # 1024
 assert( Nspec_bins == 1024)
 Nspecs = raw_specs.shape[0]  # number of spectra
@@ -35,7 +34,7 @@ en_bins = np.arange( Edata[0],Edata[-1]+1, ev_width)
 en_bin_cent = 0.5*en_bins[1:] + 0.5*en_bins[:-1]
 spec_hists = np.zeros((Nspecs, en_bin_cent.shape[0]))
 for i_spec, spec in enumerate(raw_specs):
-    if i_spec %50==0:
+    if i_spec %2000==0:
         print ('processing spec %d / %d') % (i_spec+1, Nspecs)
     spec_hists[i_spec] = np.histogram(Edata, en_bins, weights=spec)[0]
 
