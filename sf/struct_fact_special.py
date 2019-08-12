@@ -9,6 +9,7 @@ from cctbx import sgtbx, crystal, miller
 from cctbx.array_family import flex
 
 from cxid9114.parameters import ENERGY_CONV
+from cctbx.eltbx import henke, sasaki
 
 
 class Yb_scatter:
@@ -19,7 +20,11 @@ class Yb_scatter:
             input_file = "fp_fdp.npz"
         self.input_file = input_file
         
-        self._load()
+        if input_file is not None:
+            self._load()
+
+        self.hen_tbl = henke.table("Yb")
+        self.sas_tbl = sasaki.table("Yb")
 
     def _load(self):
         self.data = np.load(self.input_file)
@@ -28,14 +33,40 @@ class Yb_scatter:
         self.fdp_raw = self.data["fdp"]
         self.fp_I = interp1d(self.ev_range, self.fp_raw, kind='linear')
         self.fdp_I = interp1d(self.ev_range, self.fdp_raw, kind='linear')
+        self.loaded = True
 
     def fp(self, wavelen_A):
+        if not self.loaded:
+            return None
         ev = ENERGY_CONV/wavelen_A
         return self.fp_I(ev)[()]
 
     def fdp(self, wavelen_A):
+        if not self.loaded:
+            return None
         ev = ENERGY_CONV/wavelen_A
         return self.fdp_I(ev)[()]
+
+
+    def fp_tbl(self, wavelen_A=None, ev=None, henke=True):
+        if wavelen_A is not None:
+            ev = ENERGY_CONV/wavelen_A
+        kev = ev*1e-3
+        if henke:
+            factor = self.hen_tbl.at_kev(kev)
+        else:
+            factor = self.sas_tbl.at_kev(kev)
+        return factor.fp()
+
+    def fdp_tbl(self, wavelen_A=None, ev=None, henke=True):
+        if wavelen_A is not None:
+            ev = ENERGY_CONV/wavelen_A
+        kev = ev*1e-3
+        if henke:
+            factor = self.hen_tbl.at_kev(kev)
+        else:
+            factor = self.sas_tbl.at_kev(kev)
+        return factor.fdp()
 
 
 def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_name=None):
@@ -88,7 +119,7 @@ def main():
     Fout = []
     indices_prev = None  # for sanity check on miller arrays
     for i_en, en in enumerate(en_chans):
-        if i_en % 10==0:
+        if i_en % 10 == 0:
             print ("Computing sf for energy channel %d / %d " %( i_en, len(en_chans)))
         wave = ENERGY_CONV / en
         F = sfgen(wave,
@@ -103,10 +134,9 @@ def main():
         if indices_prev is None:
             indices_prev = F.indices()
             continue
-        assert( all(i==j for i,j in zip(F.indices(), indices_prev)))
+        assert( all(i == j for i, j in zip(F.indices(), indices_prev)))
         indices_prev = F.indices()
 
-        indices = F.indices()
     hkl = F.indices()   # at this point, should be same hkl list for all energy channels
     hkl = np.vstack([hkl[i] for i in range(len(hkl))])
     with h5py.File(output_name, "w") as h5_out:
