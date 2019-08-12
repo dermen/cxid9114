@@ -85,7 +85,11 @@ title("results of f prime  integral")
 vlines(8944,-50,60, color='#777777',alpha=0.7, lw=2, label='LIII edge')
 for i_E, E in enumerate(ev_range):
     dE = all_x[1] - all_x[0]
-    vals = [Fdp *dE* e / (E**2 - e**2) for e,Fdp in zip(all_x, all_y)]
+    
+    e = all_x
+    Fdp = all_y
+    vals = Fdp *dE* e / (E**2 - e**2) 
+    #vals = [Fdp *dE* e / (E**2 - e**2) for e,Fdp in zip(all_x, all_y)]
     # NOTE: clean up the slops
     vals = np.array(vals)
     vals[isinf(vals)] = 0
