@@ -14,7 +14,6 @@ electron_ppix = 10/148.58
 # load in the data which is stored in csv
 import numpy as np
 d = np.loadtxt("fdp_scan.csv", delimiter=',')
-from IPython import embed
 x,y = d.T  # this is the eV(s) and electron(s) axis 
 
 
@@ -53,8 +52,7 @@ plot( ev_range, I_fdp(ev_range) ,'--',label="interpolated")
 
 show()
 
-# towards higher energies
-outer_range = np.arange(9080, 13000)
+# PAD WITH  zeros for integration
 # e- decay with increasing energy
 # (slope taken from henke table after LIII (8944) edge)
 m_e = -0.0019672131147541  
