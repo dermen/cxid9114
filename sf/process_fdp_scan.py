@@ -1,7 +1,7 @@
 """
-Here is a history of code run to get Fprime from the 
-high-resolution scane of F-doubleprime from the 
-Hendrickson tables..
+RUN THIS SCRIPT AND IT WILL WALK YOU THROUGH THE PROCESS
+OF INTEPOLATING THE SCAN DATA TO GET "F DBL PRIME" AND THEN 
+INTEGRATING TO GET "F PRIME"
 """
 # coding: utf-8
 
