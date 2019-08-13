@@ -126,17 +126,17 @@ class PatternFactory:
     def __init__(self, crystal=None, detector=None, beam=None,
                  Ncells_abc=(10,10,10), Gauss=False, oversample=0, panel_id=0,
                  recenter=True, verbose=10, profile=None, device_Id=None,
-                 beamsize_mm=.004, exposure_s=1, flux=1e12):
+                 beamsize_mm=.004, exposure_s=1, progress_meter=False):
 
         self.beam = beam
+        self._is_beam_a_flexBeam()
         self.detector = detector
         self.crystal = crystal
         self.panel_id = panel_id
 
-        self.SIM2 = nanoBragg(self.detector, self.beam, verbose=verbose, panel_id=panel_id)
+        self.SIM2 = nanoBragg(self.detector, self.SIM_init_beam, verbose=verbose, panel_id=panel_id)
         if oversample > 0:
             self.SIM2.oversample = oversample
-        self.SIM2.polarization = 1  # polarization fraction ?
         self.SIM2.Ncells_abc = Ncells_abc  # important to set this First!
         self.SIM2.F000 = 0
         self.SIM2.default_F = 0
@@ -159,20 +159,34 @@ class PatternFactory:
         if device_Id is not None: 
             self.SIM2.device_Id=device_Id
 
-        #self.SIM2.flux = flux
         self.SIM2.beamsize_mm = beamsize_mm
         self.SIM2.exposure_s = exposure_s
         self.SIM2.interpolate = 0
-        self.SIM2.progress_meter = False
+        self.SIM2.progress_meter = progress_meter
         self.SIM2.verbose = verbose
         self.FULL_ROI = self.SIM2.region_of_interest
 
         if recenter:  # FIXME: I am not sure why this seems to be necessary to preserve geom
             #a = self.SIM2.beam_center_mm
             #print "Beam center was:",a
-            self.SIM2.beam_center_mm = self.detector[panel_id].get_beam_centre(self.beam.get_s0())
+            self.SIM2.beam_center_mm = self.detector[panel_id].get_beam_centre(self.SIM_init_beam.get_s0())
             #print "Now, beam center is ", self.SIM2.beam_center_mm, "Why is this happening???"
 
+        if self.beam_is_flexBeam:
+            self.SIM2.xray_beams = self.beam
+
+    def _is_beam_a_flexBeam(self):
+        try:
+            _=self.beam.get_wavelength()
+            self.beam_is_flexBeam = False
+            self.SIM_init_beam = self.beam
+        except AttributeError:
+            self.beam_is_flexBeam = True
+            # TODO insert checks to verify all directions in beam are same (only flux and energy can vary)
+            from copy import deepcopy
+            self.SIM_init_beam = deepcopy(self.beam[0])  # init sim with first beam
+            # TODO: eliminate need to do this:
+            self.SIM_init_beam.set_wavelength(self.SIM_init_beam.get_wavelength()*1e10)
 
     def adjust_mosaicity(self, mosaic_domains=25, mosaic_spread=0.01):
         self.SIM2.mosaic_spread_deg = mosaic_spread  # from LS49
@@ -182,7 +196,7 @@ class PatternFactory:
         self.SIM2.set_mosaic_blocks(self.Umats)
 
     def adjust_divergence(self, div_tuple=(0,0,0)):
-        h,v,s = div_tuple
+        h, v, s = div_tuple
         self.SIM2.divergence_hv_mrad = (h,v)
         self.SIM2.divstep_hv_mrad =( s,s)
 
@@ -195,7 +209,7 @@ class PatternFactory:
         # order of things is important here, Amatrix needs to be set
         #   after Fhkl in current code!!
         if isinstance(F, cctbx.miller.array):
-            self.SIM2.Fhkl = F.amplitudes()
+            self.SIM2.Fhkl = F.as_amplitude_array() #amplitudes()
         elif F is not None:
             self.SIM2.default_F = F
         if crystal is not None:
@@ -203,10 +217,18 @@ class PatternFactory:
         self.SIM2.raw_pixels *= 0
         self.SIM2.region_of_interest = self.FULL_ROI
 
-    def sim_rois(self, rois, reset=True, cuda=False, omp=False,
+    def prime_multi_Fhkl(self, multisource_Fhkl):
+
+        assert self.beam_is_flexBeam
+        assert len(multisource_Fhkl) == len(self.beam)
+        self.SIM2.Multisource_Fhkl = multisource_Fhkl
+
+    def sim_rois(self, rois=None, reset=True, cuda=False, omp=False,
                 add_water=False, boost=1,
                 add_spots=True):
-        
+
+        if rois is None:
+            rois = [self.FULL_ROI]
         if add_spots:
             for roi in rois:
                 self.SIM2.region_of_interest = roi
@@ -242,7 +264,7 @@ class PatternFactory:
 
 
 def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
-               Gauss=False, oversample=0, Ncells_abc=(5,5,5),verbose=0,
+               Gauss=False, oversample=0, Ncells_abc=(5,5,5), verbose=0,
                div_tup=(0.,0.), disp_pct=0., mos_dom=2, mos_spread=0.15, profile=None,
                roi_pp=None, counts_pp=None, cuda=False, omp=False, gimmie_Patt=False,
                add_water=False, boost=1, device_Id=0,
