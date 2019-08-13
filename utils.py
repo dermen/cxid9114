@@ -233,3 +233,4 @@ def random_rotation(deflection=1.0, randnums=None):
     mat = (np.outer(vec, vec) - np.eye(3)).dot(rot)
     return mat.reshape(3, 3)
 
+

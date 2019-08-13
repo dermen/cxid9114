@@ -1,6 +1,7 @@
 
 import inspect
 import numpy as np
+import time
 
 import cctbx
 import scitbx
@@ -16,7 +17,7 @@ from cxid9114 import parameters
 
 
 def mosaic_blocks(mos_spread_deg, mos_domains,
-                  twister_seed=0, random_seed=1234):
+                  twister_seed=None, random_seed=None):
     """
     Code from LS49 for adjusting mosaicity of simulation
     :param mos_spread_deg: spread in degrees
@@ -26,6 +27,10 @@ def mosaic_blocks(mos_spread_deg, mos_domains,
     :return:
     """
     UMAT_nm = flex.mat3_double()
+    if twister_seed is None:
+        twister_seed = 0 # int(time.time()*1e6)
+    if random_seed is None:
+        random_seed =  0 #int(time.time()*1e6)
     mersenne_twister = flex.mersenne_twister(seed=twister_seed)
     scitbx.random.set_random_seed(random_seed)
     rand_norm = scitbx.random.normal_distribution(mean=0,
@@ -35,6 +40,7 @@ def mosaic_blocks(mos_spread_deg, mos_domains,
     for m in mosaic_rotation:
         site = col(mersenne_twister.random_double_point_on_sphere())
         UMAT_nm.append(site.axis_and_angle_as_r3_rotation_matrix(m, deg=False) )
+        UMAT_nm.append(site.axis_and_angle_as_r3_rotation_matrix(-m, deg=False) )  # NOTE: make symmetric dist
     return UMAT_nm
 
 
@@ -171,10 +177,14 @@ class PatternFactory:
     def adjust_mosaicity(self, mosaic_domains=25, mosaic_spread=0.01):
         self.SIM2.mosaic_spread_deg = mosaic_spread  # from LS49
         self.SIM2.mosaic_domains = mosaic_domains  # from LS49
-        self.SIM2.set_mosaic_blocks(mosaic_blocks(self.SIM2.mosaic_spread_deg,
-                                                    self.SIM2.mosaic_domains))
-    def adjust_divergence(self, div_tuple=(0,0)):
-        self.SIM2.divergence_hv_mrad = div_tuple
+        self.Umats = mosaic_blocks(self.SIM2.mosaic_spread_deg,
+                                                    self.SIM2.mosaic_domains)
+        self.SIM2.set_mosaic_blocks(self.Umats)
+
+    def adjust_divergence(self, div_tuple=(0,0,0)):
+        h,v,s = div_tuple
+        self.SIM2.divergence_hv_mrad = (h,v)
+        self.SIM2.divstep_hv_mrad =( s,s)
 
     def adjust_dispersion(self, pct=0.):
         self.SIM2.dispersion_pct = pct
@@ -238,6 +248,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                add_water=False, boost=1, device_Id=0,
                beamsize_mm=None, exposure_s=None, accumulate=False, only_water=False, add_spots=True):
 
+
     Npan = len(detector)
     Nchan = len(energies)
 
@@ -281,9 +292,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
        
         PattF.adjust_dispersion(disp_pct)
         PattF.adjust_divergence(div_tup)
-        
+          
         for i_en in range(Nchan):
-            print i_en
             if fluxes[i_en] == 0:
                 continue
             
@@ -327,24 +337,33 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
 class microcrystal(object):
   # from LS49 but mod so works for beams bigger than the crystal
   def __init__(self, Deff_A, length_um, beam_diameter_um):
-    from libtbx import adopt_init_args
-    adopt_init_args(self, locals())
     # Deff_A is the effective domain size in Angstroms.
     # length_um is the effective path of the beam through the crystal in microns
     # beam_diameter_um is the effective (circular) beam diameter intersecting with the crystal in microns
     # assume a cubic crystal
+    self.beam_area_um2 = np.pi* beam_diameter_um*beam_diameter_um / 4
     if beam_diameter_um > length_um:
-      self.illuminated_volume_um3 = math.pi * (beam_diameter_um/2.) * (beam_diameter_um/2.) * length_um
+      self.illuminated_volume_um3 = self.beam_area_um2*length_um
     else:
       self.illuminated_volume_um3 = length_um**3
 
-    self.domain_volume_um3 = (4./3.)*math.pi*math.pow( Deff_A / 2. / 1.E4, 3)
+    self.domain_volume_um3 = (4./3.)*np.pi*np.power( Deff_A / 2. / 1.E4, 3)
     self.domains_per_crystal = self.illuminated_volume_um3 / self.domain_volume_um3
     print("There are %d domains in the crystal"%self.domains_per_crystal)
+
+    # assume circular domain projections and compute
+    # number of domains per cross sectional area of beam focus
+    Deff_um = Deff_A *1e-4
+    self.domains_per_length = float(length_um) / Deff_um
+
   def number_of_cells(self, unit_cell):
-    cell_volume_um3 = unit_cell.volume()/math.pow(1.E4,3)
+    """if total then return total number of cells, else return number of cells
+     normalized by cells per beam focus cross section"""
+    cell_volume_um3 = unit_cell.volume()/np.power(1.E4,3)
     cells_per_domain = self.domain_volume_um3 / cell_volume_um3
-    cube_root = math.pow(cells_per_domain,1./3.)
+    cube_root = np.power(cells_per_domain,1./3.)
+   
     int_CR = round(cube_root,0)
-    print("cells per domain",cells_per_domain,"%d x %d x %d"%(int_CR,int_CR,int_CR))
+    print("cells per domain", cells_per_domain,"%d x %d x %d"%(int_CR,int_CR,int_CR))
     return int(int_CR)
+
