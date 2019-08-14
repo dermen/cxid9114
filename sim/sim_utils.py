@@ -126,7 +126,8 @@ class PatternFactory:
     def __init__(self, crystal=None, detector=None, beam=None,
                  Ncells_abc=(10,10,10), Gauss=False, oversample=0, panel_id=0,
                  recenter=True, verbose=10, profile=None, device_Id=None,
-                 beamsize_mm=.004, exposure_s=1, progress_meter=False):
+                 beamsize_mm=.004, exposure_s=1, progress_meter=False,
+                 adc_offset=0):
 
         self.beam = beam
         self._is_beam_a_flexBeam()
@@ -159,6 +160,7 @@ class PatternFactory:
         if device_Id is not None: 
             self.SIM2.device_Id=device_Id
 
+        self.SIM2.adc_offset = adc_offset
         self.SIM2.beamsize_mm = beamsize_mm
         self.SIM2.exposure_s = exposure_s
         self.SIM2.interpolate = 0
@@ -226,6 +228,8 @@ class PatternFactory:
     def sim_rois(self, rois=None, reset=True, cuda=False, omp=False,
                 add_water=False, boost=1,
                 add_spots=True):
+        #self.SIM2.show_params()
+        #exit()
 
         if rois is None:
             rois = [self.FULL_ROI]
@@ -268,8 +272,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                div_tup=(0.,0.), disp_pct=0., mos_dom=2, mos_spread=0.15, profile=None,
                roi_pp=None, counts_pp=None, cuda=False, omp=False, gimmie_Patt=False,
                add_water=False, boost=1, device_Id=0,
-               beamsize_mm=None, exposure_s=None, accumulate=False, only_water=False, add_spots=True):
-
+               beamsize_mm=None, exposure_s=None, accumulate=False, only_water=False, add_spots=True, adc_offset=0):
 
     Npan = len(detector)
     Nchan = len(energies)
@@ -304,8 +307,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                                profile=profile, 
                                beamsize_mm=beamsize_mm,
                                exposure_s=exposure_s,
-                               flux=np.sum(fluxes),
-                               device_Id=device_Id)
+                               device_Id=device_Id,
+                               adc_offset=adc_offset)
         
         if not only_water:
             PattF.adjust_mosaicity(mos_dom, mos_spread)
