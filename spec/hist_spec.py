@@ -7,7 +7,7 @@ fname = os.path.join( os.path.dirname(__file__), "realspec.h5")
 f = h5py.File(fname, "r+")
 
 # normalize with this flux level
-ave_fluence = 2e11
+ave_fluence = 8e10
 # resolution of output spectrum
 ev_width = 1
 # this scales the FEE x-axis to electron volts

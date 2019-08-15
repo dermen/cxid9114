@@ -28,9 +28,9 @@ def mosaic_blocks(mos_spread_deg, mos_domains,
     """
     UMAT_nm = flex.mat3_double()
     if twister_seed is None:
-        twister_seed = 0 # int(time.time()*1e6)
+        twister_seed = 777 
     if random_seed is None:
-        random_seed =  0 #int(time.time()*1e6)
+        random_seed =  777
     mersenne_twister = flex.mersenne_twister(seed=twister_seed)
     scitbx.random.set_random_seed(random_seed)
     rand_norm = scitbx.random.normal_distribution(mean=0,
@@ -127,7 +127,7 @@ class PatternFactory:
                  Ncells_abc=(10,10,10), Gauss=False, oversample=0, panel_id=0,
                  recenter=True, verbose=10, profile=None, device_Id=None,
                  beamsize_mm=.004, exposure_s=1, progress_meter=False,
-                 adc_offset=0):
+                 crystal_size_mm=None, adc_offset=0):
 
         self.beam = beam
         self._is_beam_a_flexBeam()
@@ -142,6 +142,9 @@ class PatternFactory:
         self.SIM2.F000 = 0
         self.SIM2.default_F = 0
         self.SIM2.Amatrix = Amatrix_dials2nanoBragg(crystal)  # sets the unit cell
+        self.crystal_size_mm = crystal_size_mm
+        if crystal_size_mm is not None:
+            self.crystal_volume = crystal_size_mm**3
         if Gauss:
             self.SIM2.xtal_shape = shapetype.Gauss
         else:
@@ -212,6 +215,16 @@ class PatternFactory:
         #   after Fhkl in current code!!
         if isinstance(F, cctbx.miller.array):
             self.SIM2.Fhkl = F.as_amplitude_array() #amplitudes()
+
+        if self.crystal_size_mm is not None:
+            try:
+                self.mosaic_domain_volume = \
+                    self.SIM2.xtal_size_mm[0]*self.SIM2.xtal_size_mm[1]*self.SIM2.xtal_size_mm[2]
+                self.SIM2.spot_scale = self.crystal_volume / self.mosaic_domain_volume
+                self.spot_scale = self.SIM2.spot_scale
+            except AttributeError:
+                pass
+
         elif F is not None:
             self.SIM2.default_F = F
         if crystal is not None:
@@ -227,9 +240,11 @@ class PatternFactory:
 
     def sim_rois(self, rois=None, reset=True, cuda=False, omp=False,
                 add_water=False, boost=1,
-                add_spots=True):
-        #self.SIM2.show_params()
-        #exit()
+                add_spots=True, show_params=False):
+        if show_params:
+            self.SIM2.show_params()
+            print("  Mosaic domain size mm = %.3g" % np.power(self.mosaic_domain_volume, 1/3.))
+            print("  Spot scale = %.3g" % self.SIM2.spot_scale)
 
         if rois is None:
             rois = [self.FULL_ROI]
@@ -272,7 +287,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                div_tup=(0.,0.), disp_pct=0., mos_dom=2, mos_spread=0.15, profile=None,
                roi_pp=None, counts_pp=None, cuda=False, omp=False, gimmie_Patt=False,
                add_water=False, boost=1, device_Id=0,
-               beamsize_mm=None, exposure_s=None, accumulate=False, only_water=False, add_spots=True, adc_offset=0):
+               beamsize_mm=None, exposure_s=None, accumulate=False, only_water=False, 
+               add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None):
 
     Npan = len(detector)
     Nchan = len(energies)
@@ -308,6 +324,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                                beamsize_mm=beamsize_mm,
                                exposure_s=exposure_s,
                                device_Id=device_Id,
+                               crystal_size_mm=crystal_size_mm,
                                adc_offset=adc_offset)
         
         if not only_water:
@@ -317,7 +334,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
        
         PattF.adjust_dispersion(disp_pct)
         PattF.adjust_divergence(div_tup)
-          
+         
+        en_count = 0 
         for i_en in range(Nchan):
             if fluxes[i_en] == 0:
                 continue
@@ -326,17 +344,21 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                          energy=energies[i_en],
                          F=fcalcs[i_en],
                          flux=fluxes[i_en])
-
+            
+            if en_count==0 and ii==0 and show_params:
+                show=True
+            else:
+                show=False
             if roi_pp is None:
                 color_img = PattF.sim_rois(rois=[PattF.FULL_ROI], 
                             reset=True, cuda=cuda, omp=omp,
                             add_water=add_water, add_spots=add_spots,
-                            boost=boost)
+                            boost=boost, show_params=show)
             else:
                 color_img = PattF.sim_rois(rois=roi_pp[ii], reset=True, 
                             cuda=cuda, omp=omp,
                             add_water=add_water, add_spots=add_spots,
-                            boost=boost)
+                            boost=boost, show_params=show)
 
                 # if simulating ROI normalize for overlapping ROI (just in case)
                 where_finite = counts_pp[ii] > 0
@@ -350,7 +372,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                     panel_imgs[i_pan] += color_img
             else:
                 panel_imgs[i_en].append(color_img)
-
+            en_count += 1
+        
         PattF.SIM2.free_all()
 
     if gimmie_Patt:

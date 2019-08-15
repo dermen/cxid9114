@@ -22,6 +22,13 @@ parser.add_argument('-N', dest='nodes', type=int, default=[1,0], nargs=2, help="
 parser.add_argument("-trials", dest='num_trials', help='trials per worker', 
     type=int, default=1 )
 parser.add_argument("--optimize-oversample", action='store_true')
+parser.add_argument("--show-params", action='store_true')
+parser.add_argument("--oversample", type=int, default=0)
+parser.add_argument("--Ncells", type=int, default=15)
+parser.add_argument("--xtal_size_mm", type=float, default=None)
+parser.add_argument("--mos_spread_deg", type=float, default="0.01")
+parser.add_argument("--mos_doms", type=int, default=100)
+parser.add_argument("--xtal_size_jitter", type=float, default=None)
 args = parser.parse_args()
 
 
@@ -37,18 +44,14 @@ ngpu = args.ngpu
 ofile = args.ofile
 div_tup = (0,0,0) #(0.13, .13, 0.06)  # horiz, verti, stpsz (mrads)
 
-kernels_per_gpu = 1
-smi_stride = 5
+kernels_per_gpu=1
+smi_stride=5
 GAIN=28
 beam_diam_mm = 1.*1e-3
 exposure_s = 50e-15 #1 #50e-15  # 50 femtoseconds
-
-mos_spread = .025
-oversample = 4 # #8 # #0
+mos_spread = args.mos_spread_deg
+mos_doms = args.mos_doms
 adc_offset = 0 
-
-Deff_A = 3500  # 300 nm domains  inside crystal
-crystal_length_um = 1.1 # 2. micron crystal (length) 
 
 def main(rank):
 
@@ -57,15 +60,16 @@ def main(rank):
 
     import os
     import sys
-    from cxid9114.sf import struct_fact_special
-
     import h5py
     import numpy as np
    
     from simtbx.nanoBragg import shapetype, nanoBragg 
     from scitbx.array_family import flex
     from dxtbx.model.crystal import CrystalFactory
+    from dials.algorithms.indexing.compare_orientation_matrices \
+        import rotation_matrix_differences, difference_rotation_matrix_axis_angle
 
+    from cxid9114.sf import struct_fact_special
     from cxid9114 import parameters
     from cxid9114.utils import random_rotation
     from cxid9114.sim import sim_utils
@@ -77,9 +81,6 @@ def main(rank):
     else:
         np.random.seed(args.seed) 
 
-    #crystal_length_um = np.random.normal(2, 0) #0.5) # 2. micron crystal (length) 
-    
-   
     sim_path = os.path.dirname(sim_utils.__file__)
     spectra_file = os.path.join( sim_path, "../spec/realspec.h5")
     sfall_file = os.path.join(sim_path, "../sf/realspec_sfall.h5")
@@ -89,24 +90,11 @@ def main(rank):
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
     
     beamsize_mm = np.sqrt(np.pi*(beam_diam_mm/2)**2)
+    Ncells_abc = (args.Ncells, args.Ncells, args.Ncells)
     
     # TODO: verify this works for all variants of parallelization (multi 8-GPU nodes, multi kernels per GPU etc)
     data_fluxes_worker = np.array_split(data_fluxes_all, ngpu * kernels_per_gpu )[worker_Id]
 
-    # use micrys to determine size and number of domains in crystal
-    micrys = sim_utils.microcrystal(
-        Deff_A = Deff_A, 
-        length_um = crystal_length_um, 
-        beam_diameter_um = beam_diam_mm*1000)
-    Ntotal = micrys.number_of_cells(data_sf[0].unit_cell())
-    Ncells_abc = (Ntotal,Ntotal,Ntotal)  
-    total_doms = int(micrys.domains_per_crystal)
-    
-    intensity_boost = total_doms * (beam_diam_mm*1e3 * np.pi / crystal_length_um / 4)
-    intensity_boost = 1 #2
-
-    print("%.2f total doms; %.2f intensity boost" % (total_doms, intensity_boost))
-    mos_doms = 100
     a,b,c,_,_,_ = data_sf[0].unit_cell().parameters()
     hall = data_sf[0].space_group_info().type().hall_symbol()
     cryst_descr = {'__id__': 'crystal',  # its al,be,ga = 90,90,90
@@ -159,7 +147,6 @@ def main(rank):
         #    max_mos_spread=0.08)
         #Ctruth = params_lst[0]['crystal']
         
-        
         # the following will override some parameters
         # to aid simulation of a background image using same pipeline
         if make_background:
@@ -171,51 +158,60 @@ def main(rank):
             only_water=True
         else:
             only_water=False
+      
+        xtal_size_mm = args.xtal_size_mm
+        if args.xtal_size_jitter is not None:
+            xtal_size_mm = np.random.normal(xtal_size_mm, args.xtal_size_jitter)
+
+        sim_args = [crystal, DET, BEAM, data_sf, data_energies, data_fluxes]
+        sim_kwargs = {'pids':None, 
+                    'profile':args.profile, 
+                    'cuda':cuda,
+                    'oversample':args.oversample,
+                    'Ncells_abc':Ncells_abc, 
+                    'accumulate':True, 
+                    'mos_dom':mos_doms, 
+                    'mos_spread':mos_spread, 
+                    'exposure_s':exposure_s, 
+                    'beamsize_mm':beamsize_mm,
+                    'only_water':only_water, 
+                    'device_Id':device_Id, 
+                    'div_tup':div_tup, 
+                    'gimmie_Patt':True, 
+                    'adc_offset':adc_offset, 
+                    'show_params':args.show_params,
+                    'crystal_size_mm':xtal_size_mm}
 
         print ("SIULATING DATA IMAGE")
         if args.optimize_oversample:
             oversample = 1
             reference = None
             while 1:
-                simsDataSum, PattFact = sim_utils.sim_colors(
-                    crystal, DET, BEAM, data_sf, 
-                    data_energies, 
-                    data_fluxes,
-                    pids=None, profile=args.profile, 
-                    cuda=cuda,
-                    oversample=oversample,
-                    Ncells_abc=Ncells_abc, accumulate=True, mos_dom=mos_doms, 
-                    mos_spread=mos_spread, boost=intensity_boost,
-                    exposure_s=exposure_s, beamsize_mm=beamsize_mm,
-                    only_water=only_water, device_Id=device_Id, div_tup=div_tup, gimmie_Patt=True, adc_offset=adc_offset)
+                sim_kwargs['oversample']=oversample
+                simsDataSum, PattFact = sim_utils.sim_colors(*sim_args, **sim_kwargs)
                 simsDataSum = np.array(simsDataSum)
                 
                 if oversample == 1:
                     reference = simsDataSum
                
                 else: 
-                    residual = np.abs(reference - simsDataSum).sum()
-                    print ("Oversample = %d; reference residual = %f" % (oversample, residual))
-                    if np.allclose(simsDataSum, reference, atol=4):  # Am I within a few photons everywhere ?   (only matters up to shot noise...) 
+                    residual = np.abs(reference - simsDataSum)
+                   
+                    where_one_photon = np.where( simsDataSum > 1) 
+                    N_over_sigma = (residual[where_one_photon] > np.sqrt(reference[where_one_photon])).sum()
+                    print ("Oversample = %d; |Residual| summed = %f; N over sigma: %d" \
+                        % (oversample, residual.sum(), N_over_sigma))
+                    if np.allclose(simsDataSum, reference, atol=4):  
                         print ("Optimal oversample for current parameters: %d\nGoodbyw" % oversample)
                         sys.exit()
                     reference =simsDataSum
                 oversample += 1
 
         else:
-            simsDataSum, PattFact = sim_utils.sim_colors(
-                crystal, DET, BEAM, data_sf, 
-                data_energies, 
-                data_fluxes,
-                pids=None, profile=args.profile, 
-                cuda=cuda,
-                oversample=oversample,
-                Ncells_abc=Ncells_abc, accumulate=True, mos_dom=mos_doms, 
-                mos_spread=mos_spread, boost=intensity_boost,
-                exposure_s=exposure_s, beamsize_mm=beamsize_mm,
-                only_water=only_water, device_Id=device_Id, div_tup=div_tup, gimmie_Patt=True, adc_offset=adc_offset)
-                
+            simsDataSum, PattFact = sim_utils.sim_colors(*sim_args, **sim_kwargs)
+            #    
             Umats = PattFact.Umats
+            spot_scale = PattFact.spot_scale
             simsDataSum = np.array(simsDataSum)
         
         if make_background:
@@ -229,7 +225,7 @@ def main(rank):
             print("ADDING BG")
             background = h5py.File(bg_name, "r")['bigsim_d9114'][()]
             # background was made using average flux over all shots, so scale it up/down here
-            bg_scale = 0.2* data_fluxes.sum() / ave_flux_across_exp
+            bg_scale = data_fluxes.sum() / ave_flux_across_exp
             # TODO consider varying the background level to simultate jet thickness jitter
             simsDataSum[0] += background * bg_scale
 
@@ -252,7 +248,16 @@ def main(rank):
                 SIM.free_all()
                 del SIM
 
-    
+        #all_rots =[]
+        #from scitbx.matrix import sqr
+        #for i_U, U in enumerate(Umats):
+        #    Utruth = crystal.get_U()
+        #    crystal2 = CrystalFactory.from_dict(cryst_descr)
+        #    crystal2.set_U( sqr(U)*sqr(Utruth) )
+        #    out = difference_rotation_matrix_axis_angle(crystal, crystal2)
+        #    all_rots.append(out[2])
+        #assert( np.mean(all_rots) < 1e-7) 
+
         if args.write_img:
             print "SAVING DATAFILE"
             h5name = "%s_rank%d_data%d.h5" % (ofile, worker_Id, i_data)
@@ -262,8 +267,9 @@ def main(rank):
             fout.create_dataset("crystalA", data=crystal.get_A() )
             fout.create_dataset("crystalU", data=crystal.get_U() )
             fout.create_dataset("spectrum", data=data_fluxes)
-            fout.create_dataset("intensity_boost", data=intensity_boost)
-            fout.create_dataset("Deff_A", data=Deff_A)
+            #fout.create_dataset("crystal_size", data=args.xtal_size_mm)
+            #fout.create_dataset("Ncells", data=args.Ncells)
+            #fout.create_dataset("Deff_A", data=Deff_A)
             fout.create_dataset("mos_doms", data=mos_doms)
             fout.create_dataset("mos_spread", data=mos_spread)
             fout.create_dataset("Ncells_abc", data=Ncells_abc)
@@ -272,6 +278,7 @@ def main(rank):
             fout.create_dataset("exposure_s", data=exposure_s)
             fout.create_dataset("profile", data=profile)
             fout.create_dataset("Umats", data=Umats)
+            fout.create_dataset("spot_scale", data=spot_scale)
             # TODO: write out the Umats
             # TODO: write out all other parameters
             fout.close()  
