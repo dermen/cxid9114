@@ -15,7 +15,7 @@ parser.add_argument("--make-background", dest='make_bg', action='store_true',
     help="Just make the background image and quit")
 parser.add_argument("--bg-name", dest='bg_name', default='background64.h5',
     type=str, help="name of the background file, either to make/overwrite, or load (default)")
-parser.add_argument("-g", dest='ngpu', type=int, default=1,help='number of gpu' )
+parser.add_argument("-g", dest='ngpu_per_node', type=int, default=1,help='number of gpu' )
 parser.add_argument("--overwrite", dest='overwrite',action='store_true',help='overwrite files' )
 parser.add_argument("--write-img", dest='write_img', action='store_true')
 parser.add_argument('-N', dest='nodes', type=int, default=[1,0], nargs=2, help="Number of nodes, and node id")
@@ -40,10 +40,10 @@ num_nodes, node_id = args.nodes
 make_background = args.make_bg
 bg_name = args.bg_name
 overwrite = args.overwrite
-ngpu = args.ngpu
+ngpu_per_node = args.ngpu_per_node
 ofile = args.ofile
 div_tup = (0,0,0) #(0.13, .13, 0.06)  # horiz, verti, stpsz (mrads)
-
+    
 kernels_per_gpu=1
 smi_stride=5
 GAIN=28
@@ -53,11 +53,13 @@ mos_spread = args.mos_spread_deg
 mos_doms = args.mos_doms
 adc_offset = 0 
 
+
 def main(rank):
 
-    device_Id = rank % ngpu
-    worker_Id = node_id*ngpu + rank  # support for running on multiple N-node GPUs to increase worker pool
-
+    device_Id = rank % ngpu_per_node
+    
+    worker_Id = node_id*ngpu_per_node + rank  # support for running on multiple N-node GPUs to increase worker pool
+    
     import os
     import sys
     import h5py
@@ -93,7 +95,7 @@ def main(rank):
     Ncells_abc = (args.Ncells, args.Ncells, args.Ncells)
     
     # TODO: verify this works for all variants of parallelization (multi 8-GPU nodes, multi kernels per GPU etc)
-    data_fluxes_worker = np.array_split(data_fluxes_all, ngpu * kernels_per_gpu )[worker_Id]
+    data_fluxes_worker = np.array_split(data_fluxes_all, ngpu_per_node*kernels_per_gpu*num_nodes )[worker_Id]
 
     a,b,c,_,_,_ = data_sf[0].unit_cell().parameters()
     hall = data_sf[0].space_group_info().type().hall_symbol()
@@ -112,6 +114,12 @@ def main(rank):
     crystal = CrystalFactory.from_dict(cryst_descr)
     print("Rank %d Begin" % worker_Id)
     for i_data in range( args.num_trials):
+        h5name = "%s_rank%d_data%d.h5" % (ofile, worker_Id, i_data)
+        h5name = os.path.join( odirj, h5name)
+        if os.path.exists(h5name) and not args.overwrite:
+            print("Job %d: skipping- image %s already exists!" \
+                %(worker_Id, h5name))
+            continue
 
         print("<><><><><><><")
         print("Job %d:  trial  %d / %d" % ( worker_Id, i_data+1, args.num_trials ))
@@ -260,16 +268,11 @@ def main(rank):
 
         if args.write_img:
             print "SAVING DATAFILE"
-            h5name = "%s_rank%d_data%d.h5" % (ofile, worker_Id, i_data)
-            h5name = os.path.join( odirj, h5name)
             fout = h5py.File(h5name,"w" ) 
-            fout.create_dataset("bigsim_d9114", data=simsDataSum[0])
+            fout.create_dataset("bigsim_d9114", data=simsDataSum[0].astype(np.float32), compression='lzf')
             fout.create_dataset("crystalA", data=crystal.get_A() )
             fout.create_dataset("crystalU", data=crystal.get_U() )
             fout.create_dataset("spectrum", data=data_fluxes)
-            #fout.create_dataset("crystal_size", data=args.xtal_size_mm)
-            #fout.create_dataset("Ncells", data=args.Ncells)
-            #fout.create_dataset("Deff_A", data=Deff_A)
             fout.create_dataset("mos_doms", data=mos_doms)
             fout.create_dataset("mos_spread", data=mos_spread)
             fout.create_dataset("Ncells_abc", data=Ncells_abc)
@@ -277,17 +280,15 @@ def main(rank):
             fout.create_dataset("beamsize_mm", data=beamsize_mm)
             fout.create_dataset("exposure_s", data=exposure_s)
             fout.create_dataset("profile", data=profile)
-            fout.create_dataset("Umats", data=Umats)
+            fout.create_dataset("xtal_size_mm", data=xtal_size_mm)
             fout.create_dataset("spot_scale", data=spot_scale)
-            # TODO: write out the Umats
-            # TODO: write out all other parameters
             fout.close()  
 
         print("DonDonee")
 
 if __name__=="__main__":
     from joblib import Parallel,delayed
-    Parallel(n_jobs=ngpu*kernels_per_gpu)(\
-        delayed(main)(rank) for rank in range(ngpu*kernels_per_gpu) )
+    Parallel(n_jobs=ngpu_per_node*kernels_per_gpu)(\
+        delayed(main)(rank) for rank in range(ngpu_per_node*kernels_per_gpu) )
 
 
