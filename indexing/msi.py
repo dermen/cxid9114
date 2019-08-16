@@ -69,8 +69,8 @@ def msi(jid):
     if not os.path.exists(out_dir):
         os.makedirs(out_dir)
     refls_dir = "refls_%s" % tag
-    Els_dir = "refls_%s" % tag
-    dumps_dir = "refls_%s" % tag
+    Els_dir = "Els_%s" % tag
+    dumps_dir = "dumps_%s" % tag
     for o in [refls_dir, Els_dir, dumps_dir]:
         sub_o = os.path.join(out_dir, o)
         if not os.path.exists(sub_o):
@@ -133,7 +133,7 @@ def msi(jid):
     mad_index_params.indexing.basis_vector_combinations.max_refine = 10000000000
     #mad_index_params.indexing.basis_vector_combinations.max_combinations = 150
     #mad_index_params.indexing.stills.candidate_outlier_rejection = False
-    mad_index_params.indexing.refinement_protocol.mode = "ignore"
+    mad_index_params.indexing.refinement_protocol.mode = None #$"repredict_only"
     mad_index_params.indexing.two_color.high_energy = parameters.ENERGY_HIGH
     mad_index_params.indexing.two_color.low_energy = parameters.ENERGY_LOW
     mad_index_params.indexing.two_color.avg_energy = parameters.ENERGY_LOW * .5 + parameters.ENERGY_HIGH * .5
