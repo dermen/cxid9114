@@ -36,8 +36,8 @@ def tilting_plane(img, mask=None, zscore=2 ):
 class Integrator:
 
     def __init__(self, data, gain=1, int_radius=8):
-        self.data = data
         self.gain = gain
+        self.data = data/gain
         self.int_radius = int_radius
 
     def integrate_bbox_dirty(self, bbox):
@@ -49,6 +49,7 @@ class Integrator:
         tilt, bgmask, coeff = tilting_plane(
             sub_data,
             zscore=2)
+        # NOTE: bgmask shows the pixels that were masked before fitting the tilt plane..
 
         data_to_be_integrated = sub_data - tilt
 
@@ -56,13 +57,21 @@ class Integrator:
 
         X, Y = np.meshgrid(range(i1, i2), range(j1, j2))
 
-        R = np.sqrt((Y - cent[0]) ** 2 \
-                         + (X - cent[1]) ** 2)
+        R = np.sqrt((Y - cent[0]) ** 2
+                  + (X - cent[1]) ** 2)
 
-        int_mask = R < self.int_radius
+        rad = self.int_radius
+        if self.int_radius*2 > j2-j1 or self.int_radius*2 >= i2-i1:
+            rad = min(j2-j1, i2-i1) - 1
+        int_mask = R < rad
 
-        Yobs = (data_to_be_integrated*int_mask).sum() / self.gain
+        # from Leslie '99
+        m = np.logical_not(bgmask).sum()
+        n = int_mask.sum()
+        Is = (data_to_be_integrated*int_mask).sum()
+        Ibg = m/n * sub_data[bgmask].sum()
+        noise = (Is + Ibg + m/n * Ibg)
 
-        return Yobs
+        return Is, Ibg, noise
 
 
