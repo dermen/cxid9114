@@ -50,6 +50,7 @@ class Integrator:
             sub_data,
             zscore=2)
         # NOTE: bgmask shows the pixels that were masked before fitting the tilt plane..
+        bgmask = np.logical_not(bgmask)
 
         data_to_be_integrated = sub_data - tilt
 
@@ -67,7 +68,7 @@ class Integrator:
 
         # from Leslie '99
         m = int_mask.sum()
-        n = np.logical_not(bgmask).sum()
+        n = bgmask.sum()
         Is = (data_to_be_integrated*int_mask).sum()
         Ibg = m/n * sub_data[bgmask].sum()
         noise = (Is + Ibg + m/n * Ibg)
