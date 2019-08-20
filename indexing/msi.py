@@ -16,6 +16,7 @@ parser.add_argument('--stills-refine', dest='stills_refine', action='store_true'
 parser.add_argument('--basis-refine', dest='basis_refine', action='store_true',
     help='refine candidate basis vectors using dials basis vector search')
 parser.add_argument("--min_spot", type=int, default=10)
+parser.add_argument("--Nmax", type=int, default=None)
 args = parser.parse_args()
 
 import logging
@@ -112,7 +113,8 @@ def msi(jid):
     spot_par.spotfinder.force_2d = True
 
 #   ------ indexing parameters
-    KNOWN_SYMMETRY = crystal.symmetry("79,79,38,90,90,90", "P43212")
+    KNOWN_SYMMETRY = crystal.symmetry("79,79,38,90,90,90", "P1")
+    #KNOWN_SYMMETRY = crystal.symmetry("79,79,38,90,90,90", "P43212")
     mad_index_params.refinement.parameterisation.beam.fix = "all"
     mad_index_params.refinement.parameterisation.detector.fix = "all"
     #mad_index_params.refinement.verbosity = 3
@@ -148,13 +150,16 @@ def msi(jid):
     n_idx = 0 # number indexed
 
     for idx in idx_split[jid]:
+        if args.Nmax is not None:
+            if idx == args.Nmax:
+                sys.exit()
         img_f = fnames[idx]
         
         loader = dxtbx.load(img_f)
         iset = loader.get_imageset( loader.get_image_file() )    
         DET = loader.get_detector()
         BEAM = loader.get_beam()
-        El = ExperimentListFactory.from_imageset_and_crystal( iset, crystal=None)
+        El = ExperimentListFactory.from_imageset_and_crystal(iset, crystal=None)
         
         if idx in weak_shots and skip_weak:
             print("Skipping weak shots %d" % idx)
@@ -206,7 +211,9 @@ def msi(jid):
         
         refl_pkl = os.path.join(out_dir,refls_dir, "refl_%d_%s.pkl" % (idx, tag))
         utils.save_flex(refls_strong, refl_pkl)
-        El_json = os.path.join(out_dir, Els_dir, "El_%d_%s.pkl" % (idx, tag))
+
+        El[0].crystal = crystalAB
+        El_json = os.path.join(out_dir, Els_dir, "El_%d_%s.json" % (idx, tag))
         El.as_json(filename=El_json)
         
         dump = {"crystalAB": crystalAB, 

@@ -172,12 +172,13 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
                               **kwargs)
             patches.append(R)
 
+    unique_indexed_Hi = set(all_indexed_Hi)
     if ret_patches:
         patch_coll = mpl.collections.PatchCollection(patches,
                           match_original=True)
-        return bboxes, patch_coll
+        return list(unique_indexed_Hi), bboxes, patch_coll
     else:
-        return bboxes
+        return list(unique_indexed_Hi), bboxes
 
 
 def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids=None, **kwargs):

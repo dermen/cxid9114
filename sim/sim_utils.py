@@ -213,20 +213,21 @@ class PatternFactory:
         self.SIM2.flux = flux
         # order of things is important here, Amatrix needs to be set
         #   after Fhkl in current code!!
-        if isinstance(F, cctbx.miller.array):
-            self.SIM2.Fhkl = F.as_amplitude_array() #amplitudes()
 
         if self.crystal_size_mm is not None:
             try:
                 self.mosaic_domain_volume = \
                     self.SIM2.xtal_size_mm[0]*self.SIM2.xtal_size_mm[1]*self.SIM2.xtal_size_mm[2]
                 self.SIM2.spot_scale = self.crystal_volume / self.mosaic_domain_volume
-                self.spot_scale = self.SIM2.spot_scale
+                self.spot_scale = self.crystal_volume / self.mosaic_domain_volume
             except AttributeError:
                 pass
 
+        if isinstance(F, cctbx.miller.array):
+            self.SIM2.Fhkl = F.as_amplitude_array() #amplitudes()
         elif F is not None:
             self.SIM2.default_F = F
+        
         if crystal is not None:
             self.SIM2.Amatrix = Amatrix_dials2nanoBragg(crystal)
         self.SIM2.raw_pixels *= 0
@@ -243,8 +244,9 @@ class PatternFactory:
                 add_spots=True, show_params=False):
         if show_params:
             self.SIM2.show_params()
-            print("  Mosaic domain size mm = %.3g" % np.power(self.mosaic_domain_volume, 1/3.))
-            print("  Spot scale = %.3g" % self.SIM2.spot_scale)
+            #if self.crystal_size_mm is not None:
+            #    print("  Mosaic domain size mm = %.3g" % np.power(self.mosaic_domain_volume, 1/3.))
+            #    print("  Spot scale = %.3g" % self.SIM2.spot_scale)
 
         if rois is None:
             rois = [self.FULL_ROI]
@@ -284,10 +286,10 @@ class PatternFactory:
 
 def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                Gauss=False, oversample=0, Ncells_abc=(5,5,5), verbose=0,
-               div_tup=(0.,0.), disp_pct=0., mos_dom=2, mos_spread=0.15, profile=None,
+               div_tup=(0.,0.,0.), disp_pct=0., mos_dom=2, mos_spread=0.15, profile=None,
                roi_pp=None, counts_pp=None, cuda=False, omp=False, gimmie_Patt=False,
                add_water=False, boost=1, device_Id=0,
-               beamsize_mm=None, exposure_s=None, accumulate=False, only_water=False, 
+               beamsize_mm=0.001, exposure_s=None, accumulate=False, only_water=False, 
                add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None):
 
     Npan = len(detector)
@@ -333,7 +335,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
             PattF.adjust_mosaicity(1,0)
        
         PattF.adjust_dispersion(disp_pct)
-        PattF.adjust_divergence(div_tup)
+        #PattF.adjust_divergence(div_tup)
          
         en_count = 0 
         for i_en in range(Nchan):
