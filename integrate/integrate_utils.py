@@ -66,8 +66,8 @@ class Integrator:
         int_mask = R < rad
 
         # from Leslie '99
-        m = np.logical_not(bgmask).sum()
-        n = int_mask.sum()
+        m = int_mask.sum()
+        n = np.logical_not(bgmask).sum()
         Is = (data_to_be_integrated*int_mask).sum()
         Ibg = m/n * sub_data[bgmask].sum()
         noise = (Is + Ibg + m/n * Ibg)
