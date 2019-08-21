@@ -7,6 +7,7 @@ parser = ArgumentParser("Make prediction boxes")
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--nrank", type=int, default=1)
 parser.add_argument("--glob", type=str, required=True)
+parser.add_argument("-o", type=str, default='.')
 parser.add_argument("--show_params", action='store_true')
 args = parser.parse_args()
 
@@ -38,8 +39,10 @@ for El_f in glob.glob(args.glob):
 if rank==0:
     print El_fnames
 all_paths = []
+all_Amats = []
+odir = args.o
 
-writer = h5py.File("process_rank%d.h5" % rank, "w")
+writer = h5py.File(os.path.join( odir, "process_rank%d.h5" % rank), "w")
 
 n_processed = 0
 for i_shot,(El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
@@ -49,19 +52,19 @@ for i_shot,(El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         print("Rank 0: Doing shot %d / %d" % (i_shot+1, len( El_fnames)))
 
     El = ExperimentListFactory.from_json_file(El_json, check_format=False)
-
+    
     iset = El.imagesets()[0]
     fpath = iset.get_path(0)
     h5 = h5py.File( fpath, 'r')
-    mos_spread = 0.01#h5["mos_spread"][()]
-    Ncells_abc = (20,20,20) #h5["Ncells_abc"][()]
-    mos_doms = 120 #h5["mos_doms"][()]
-    profile = "gauss" #h5["profile"][()]
+    mos_spread = h5["mos_spread"][()]
+    Ncells_abc = tuple(h5["Ncells_abc"][()])
+    mos_doms = h5["mos_doms"][()]
+    profile = h5["profile"][()]
     beamsize = h5["beamsize_mm"][()]
     exposure_s = h5["exposure_s"][()]
     spectrum = h5["spectrum"][()]
     total_flux = np.sum(spectrum) 
-    xtal_size = 0.0005 # h5["xtal_size_mm"][()]
+    xtal_size = 0.0005 #h5["xtal_size_mm"][()]
 
     refls_data = utils.open_flex(refl_pkl)
     FF = [1e3, None] # NOTE: not sure what to do here, we dont know the structure factor
@@ -97,6 +100,7 @@ for i_shot,(El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                 DET, beams, crystal, delta_q=0.0475) # ret_patches=True, fc='none', ec='w')
 
     all_paths.append(fpath)
+    all_Amats.append(crystal.get_A())
     if rank==0:
         print("Rank0: writing")
     writer.create_dataset("bboxes/shot%d" % n_processed, data=bboxes,  dtype=np.int, compression="lzf" )
@@ -105,6 +109,7 @@ for i_shot,(El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         print("Rank0: Done writing")
     n_processed += 1
 
+writer.create_dataset("Amatrices", data=all_Amats, compression="lzf")
 writer.create_dataset("h5_path", data=all_paths, compression="lzf")
 writer.close()
 

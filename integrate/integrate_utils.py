@@ -73,6 +73,9 @@ class Integrator:
         Ibg = m/n * sub_data[bgmask].sum()
         noise = (Is + Ibg + m/n * Ibg)
 
+        #from IPython import embed
+        #embed()
+    
         return Is, Ibg, noise
 
 
