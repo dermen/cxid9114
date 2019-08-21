@@ -46,6 +46,11 @@ def get_memory_usage():
 #@profile
 def main():
 
+    # some parameters
+    int_radius = 5
+    gain = 28
+
+
     # data is stored in 39 h5py_Files
     Nfiles = 39
     fname_template = "/global/project/projectdirs/lcls/dermen/process_rank%d.h5"
@@ -72,6 +77,10 @@ def main():
         print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
         shots_for_rank = array_split( shot_tuples, size)
 
+        # close the open h5s.. 
+        for h in h5s:
+            h.close()
+
     else:
         Nshots_tot = None
         shots_for_rank = None
@@ -81,7 +90,7 @@ def main():
     shots_for_rank = comm.bcast( shots_for_rank, root=0)
     #h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
     
-    my_shots =  shots_for_rank[rank][:10]
+    my_shots =  shots_for_rank[rank] 
 
     # open the unique filenames for this rank
     # TODO: check max allowed pointers to open hdf5 file
@@ -90,6 +99,7 @@ def main():
     
     Ntot = 0
     all_kept_bbox = []
+    all_is_kept_flags = []
     for img_num, ( fname_idx, shot_idx) in  enumerate( my_shots):
 
         h = my_open_files[fname_idx]
@@ -100,11 +110,12 @@ def main():
         img_data = img_h5["bigsim_d9114"][()]  # LZF decompression, but not a bottleneck
        
         bboxes = h["bboxes"]["shot%d" % shot_idx][()]
-        
-        I = Integrator(img_data, int_radius=5, gain=28)
+       
+        # Dirty integrator, sets integration region as disk of diameter 2*int_radius pixels
+        I = Integrator(img_data, int_radius=int_radius, gain=gain)
         int_data = [I.integrate_bbox_dirty( bb) for bb in bboxes]
         
-        # signal, background, variance
+        # signal, background, variance  # these are the Leslie '99 terms
         s,b,var = map(array, zip(*int_data) )
         snr = s / sqrt(var)
 
@@ -120,10 +131,16 @@ def main():
 
         print "%g total pixels (file %d / %d)" % (Ntot, img_num+1, len(my_shots))
         all_kept_bbox += map(list, kept_bboxes)
+        all_is_kept_flags += [(fname_idx, shot_idx, is_a_keeper)]   # store this information, write to disk
+  
+    # close the open hdf5 files so we can write to them again
+    for h in my_open_files.values():
+        h.close() 
     
     print("END OF LOOP")
     print "Rank %d; total bboxes=%d; Total pixels=%g" % (rank, len(all_kept_bbox), Ntot)
     all_kept_bbox = MPI.COMM_WORLD.gather(all_kept_bbox, root=0)
+    all_is_kept_flags = MPI.COMM_WORLD.gather( all_is_kept_flags, root=0)
     
     if rank==0:
         all_kept_bbox = [bbox for bbox_lst in all_kept_bbox for bbox in bbox_lst]
@@ -133,7 +150,30 @@ def main():
         print("I am root. total bboxes=%d, Total pixels=%g" % (len(all_kept_bbox), Ntot_pix))
         print("<><><><><><><<><><><><><><><><><><><><><><>")
         print
+        
+        print("I am root. I will store flags for each bbox on each shot")
+        
+        all_flag_info = [i for sl in all_is_kept_flags for i in sl]  # flatten
+       
+        # open the hdf5 files in read+write mode and store the bbox keeper flags
+        h5s = { i_f: h5py_File(f, "r+") for i_f,f in enumerate(fnames)}
 
+        for i_info, (fidx,shot_idx,keeper_flags) in enumerate(all_flag_info):
+            bbox_grp = h5s[fidx]["bboxes"]
+            
+            flag_name = "keepers%d"  % shot_idx
+            
+            if flag_name in bbox_grp:
+                del bbox_grp[flag_name]
+            
+            bbox_grp.create_dataset(flag_name, data=keeper_flags, dtype=bool, compression='lzf')
+
+            if i_info % 5==0:
+                print ("I am root. I saved bbox selection flags ( %d / %d ) " % (i_info+1, len(all_flag_info)))
+
+        # close the open files.. 
+        for h in h5s.values():
+            h.close()
 
 if __name__=="__main__" :
     main()
