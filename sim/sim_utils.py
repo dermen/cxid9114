@@ -127,12 +127,14 @@ class PatternFactory:
                  Ncells_abc=(10,10,10), Gauss=False, oversample=0, panel_id=0,
                  recenter=True, verbose=10, profile=None, device_Id=None,
                  beamsize_mm=.004, exposure_s=1, progress_meter=False,
-                 crystal_size_mm=None, adc_offset=0):
+                 crystal_size_mm=None, adc_offset=0, master_scale=None,amorphous_sample_thick_mm=0.005):
 
+        self.amorphous_sample_thick_mm = amorphous_sample_thick_mm
         self.beam = beam
         self._is_beam_a_flexBeam()
         self.detector = detector
         self.crystal = crystal
+        self.master_scale = master_scale
         self.panel_id = panel_id
 
         self.SIM2 = nanoBragg(self.detector, self.SIM_init_beam, verbose=verbose, panel_id=panel_id)
@@ -144,7 +146,10 @@ class PatternFactory:
         self.SIM2.Amatrix = Amatrix_dials2nanoBragg(crystal)  # sets the unit cell
         self.crystal_size_mm = crystal_size_mm
         if crystal_size_mm is not None:
-            self.crystal_volume = crystal_size_mm**3
+            if beamsize_mm > crystal_size_mm:
+                self.crystal_volume = crystal_size_mm**3
+            else:
+                self.crystal_volume = self.crystal_size_mm*beamsize_mm*beamsize_mm
         if Gauss:
             self.SIM2.xtal_shape = shapetype.Gauss
         else:
@@ -220,6 +225,9 @@ class PatternFactory:
                     self.SIM2.xtal_size_mm[0]*self.SIM2.xtal_size_mm[1]*self.SIM2.xtal_size_mm[2]
                 self.SIM2.spot_scale = self.crystal_volume / self.mosaic_domain_volume
                 self.spot_scale = self.crystal_volume / self.mosaic_domain_volume
+                if self.master_scale is not None:
+                    self.spot_scale = self.master_scale
+                    self.SIM2.spot_scale = self.master_scale
             except AttributeError:
                 pass
 
@@ -245,8 +253,8 @@ class PatternFactory:
         if show_params:
             self.SIM2.show_params()
             #if self.crystal_size_mm is not None:
-            #    print("  Mosaic domain size mm = %.3g" % np.power(self.mosaic_domain_volume, 1/3.))
-            #    print("  Spot scale = %.3g" % self.SIM2.spot_scale)
+            print("  Mosaic domain size mm = %.3g" % np.power(self.mosaic_domain_volume, 1/3.))
+            print("  Spot scale = %.3g" % self.SIM2.spot_scale)
 
         if rois is None:
             rois = [self.FULL_ROI]
@@ -269,9 +277,9 @@ class PatternFactory:
                 [(0, 2.57), (0.0365, 2.58), (0.07, 2.8), (0.12, 5), (0.162, 8), (0.2, 6.75), (0.18, 7.32),
                  (0.216, 6.75), (0.236, 6.5), (0.28, 4.5), (0.3, 4.3), (0.345, 4.36), (0.436, 3.77), (0.5, 3.17)])
             self.SIM2.Fbg_vs_stol = water_scatter
-            self.SIM2.amorphous_sample_thick_mm = 0.005  # typical GDVN jet thickness but could vary
             self.SIM2.amorphous_density_gcm3 = 1
             self.SIM2.amorphous_molecular_weight_Da = 18
+            self.SIM2.amorphous_sample_thick_mm = self.amorphous_sample_thick_mm 
             self.SIM2.region_of_interest = self.FULL_ROI
             self.SIM2.add_background()
 
@@ -290,7 +298,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                roi_pp=None, counts_pp=None, cuda=False, omp=False, gimmie_Patt=False,
                add_water=False, boost=1, device_Id=0,
                beamsize_mm=0.001, exposure_s=None, accumulate=False, only_water=False, 
-               add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None):
+               add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None,
+               amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None):
 
     Npan = len(detector)
     Nchan = len(energies)
@@ -327,7 +336,9 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                                exposure_s=exposure_s,
                                device_Id=device_Id,
                                crystal_size_mm=crystal_size_mm,
-                               adc_offset=adc_offset)
+                               adc_offset=adc_offset, 
+                               master_scale=master_scale,
+                               amorphous_sample_thick_mm=amorphous_sample_thick_mm)
         
         if not only_water:
             PattF.adjust_mosaicity(mos_dom, mos_spread)
@@ -375,8 +386,9 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
             else:
                 panel_imgs[i_en].append(color_img)
             en_count += 1
-        
-        PattF.SIM2.free_all()
+       
+        if free_all: 
+            PattF.SIM2.free_all()
 
     if gimmie_Patt:
         return panel_imgs, PattF

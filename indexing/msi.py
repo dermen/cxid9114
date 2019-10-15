@@ -20,6 +20,7 @@ parser.add_argument("--Nmax", type=int, default=None)
 args = parser.parse_args()
 
 import logging
+import time
 logging.basicConfig(filename="_msi_dump.log", level=logging.INFO)
     
 do_stills_refine = args.stills_refine
@@ -36,6 +37,7 @@ def msi(jid):
     Here we load a data image that has crystal diffraction
     then we spot peaks and index the crystal image
     """
+    #time.sleep(jid)
     import sys
     import numpy as np
     import glob
@@ -90,8 +92,8 @@ def msi(jid):
         return data
 
     skip_weak = False 
-    skip_failed = False
-    skip_indexed = False 
+    skip_failed = True #False
+    skip_indexed = True #False 
     weak_shots_f = os.path.join(out_dir, "weak_shots.txt")
     failed_idx_f = os.path.join(out_dir, "failed_shots.txt")
     indexed_f = os.path.join(out_dir, "indexed_shots.txt")
@@ -156,7 +158,7 @@ def msi(jid):
         img_f = fnames[idx]
         
         loader = dxtbx.load(img_f)
-        iset = loader.get_imageset( loader.get_image_file() )    
+        iset = loader.get_imageset( filenames=[loader.get_image_file()] )    
         DET = loader.get_detector()
         BEAM = loader.get_beam()
         El = ExperimentListFactory.from_imageset_and_crystal(iset, crystal=None)
@@ -216,13 +218,13 @@ def msi(jid):
         El_json = os.path.join(out_dir, Els_dir, "El_%d_%s.json" % (idx, tag))
         El.as_json(filename=El_json)
         
-        dump = {"crystalAB": crystalAB, 
-                "img_f":img_f,
-                "refined_refls_v1": orientAB.refined_reflections,
-                 "refls_strong": refls_strong}
-
-        dump_pkl = os.path.join(out_dir,dumps_dir, "dump_%d_%s.pkl" % (idx, tag))
-        utils.save_flex(dump,  dump_pkl)
+#        dump = {"crystalAB": crystalAB, 
+#                "img_f":img_f,
+#                "refined_refls_v1": orientAB.refined_reflections,
+#                 "refls_strong": refls_strong}
+#
+#        dump_pkl = os.path.join(out_dir,dumps_dir, "dump_%d_%s.pkl" % (idx, tag))
+#        utils.save_flex(dump,  dump_pkl)
 
 if __name__=="__main__":
     from joblib import Parallel,delayed

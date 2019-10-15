@@ -14,12 +14,14 @@ if rank==0:
     from numpy import sum as np_sum
     from psutil import Process
     from os import getpid
+    from numpy import load as numpy_load
 else:
     h5py_File = None
     Integrator = None
     array = sqrt = percentile = np_zeros = np_sum = None
     Process = None
     getpid = None
+    numpy_load = None
 
 h5py_File = comm.bcast(h5py_File, root=0)
 Integrator = comm.bcast(Integrator, root=0)
@@ -30,6 +32,7 @@ np_zeros = comm.bcast(np_zeros, root=0)
 np_sum = comm.bcast(np_sum, root=0)
 Process = comm.bcast(Process, root=0)
 getpid = comm.bcast( getpid, root=0)
+numpy_load = comm.bcast(numpy_load, root=0)
 
 def get_memory_usage():
     """Return the memory usage in Mo."""
@@ -40,19 +43,15 @@ def get_memory_usage():
 class BigData:
 
     def __init__(self):
-        self._load()
+        self.int_radius = 5
+        self.gain = 28
+        self.Nload = None
+        self.fnames = []
 
     #@profile
-    def _load(self):
+    def load(self):
 
         # some parameters
-        int_radius = 5
-        gain = 28
-        Nload = None
-        # bbox data is stored in 39 h5py_Files
-        Nfiles = 2 #39
-        fname_template = "/global/project/projectdirs/lcls/dermen/process_rank%d.h5"
-        fnames = [fname_template % i_f for i_f in range( Nfiles)]
 
         # NOTE: for reference, inside each h5 file there is 
         #   [u'Amatrices', u'Hi', u'bboxes', u'h5_path']
@@ -89,8 +88,8 @@ class BigData:
         #h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
         
         my_shots =  shots_for_rank[rank]
-        if Nload is not None:
-            my_shots =  my_shots[:Nload]
+        if self.Nload is not None:
+            my_shots =  my_shots[:self.Nload]
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
@@ -104,15 +103,16 @@ class BigData:
             h = my_open_files[fname_idx]
             
             # load the dxtbx image data directly:
-            img_path = h["h5_path"][shot_idx]
-            img_h5 = h5py_File(img_path, "r")
-            img_data = img_h5["bigsim_d9114"][()]  # LZF decompression, but not a bottleneck
+            npz_path = h["h5_path"][shot_idx]
+            img_data = numpy_load(npz_path)["img"]
+            #h5_path = npz_path.replace(".npz", "")
+            #img_h5 = h5py_File(h5_path, "r")
 
             bbox_dset = h["bboxes"]["shot%d" % shot_idx]
-            n_bboxes = bbox_dset.shape[0] 
+            n_bboxes_total = bbox_dset.shape[0] 
             is_a_keeper = h["bboxes"]["keepers%d" % shot_idx][()]
             
-            bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes) if is_a_keeper[i_bb]]
+            bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
           
             # actually load the pixels...  
             data_boxes = [ img_data[j1:j2, i1:i2] for i1,i2,j1,j2 in bboxes]
@@ -120,8 +120,8 @@ class BigData:
             tot_pix = [ (j2-j1)*(i2-i1) for i1,i2,j1,j2 in bboxes]
             Ntot += sum(tot_pix)
 
-            print "%g total pixels in %d / %d bboxes..  (file %d / %d);" % (Ntot, len(bboxes), n_bboxes,  img_num+1, len(my_shots))
-            assert len(bboxes) / float( n_bboxes) < 0.15  # sanity check
+            print "%g total pixels in %d / %d bboxes..  (file %d / %d);" % (Ntot, len(bboxes), n_bboxes_total,  img_num+1, len(my_shots))
+            #assert len(bboxes) / float( n_bboxes_total) < 0.15  # sanity check
             self.all_bbox_pixels += data_boxes
        
         for h in my_open_files.values():
@@ -142,4 +142,12 @@ class BigData:
        
 
 if __name__=="__main__" :
-    BigData()
+    
+    B = BigData()
+    
+    Nfiles = 2
+    fname_template = "/global/homes/d/dermen/cxid9114/indexing/proc/process_rank%d.h5"
+    fnames = [fname_template % i_f for i_f in range( Nfiles)]
+    B.fnames = fnames
+    B.load()
+

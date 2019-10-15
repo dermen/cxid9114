@@ -6,8 +6,8 @@ parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--nrank", type=int, default=1)
-parser.add_argument("--glob", type=str, required=True)
-parser.add_argument("-o", type=str, default='.')
+parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
+parser.add_argument("-o",help='output directoty',  type=str, default='.')
 parser.add_argument("--show_params", action='store_true')
 args = parser.parse_args()
 
@@ -55,7 +55,7 @@ for i_shot,(El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     
     iset = El.imagesets()[0]
     fpath = iset.get_path(0)
-    h5 = h5py.File( fpath, 'r')
+    h5 = h5py.File( fpath.replace(".npz", ""), 'r')
     mos_spread = h5["mos_spread"][()]
     Ncells_abc = tuple(h5["Ncells_abc"][()])
     mos_doms = h5["mos_doms"][()]

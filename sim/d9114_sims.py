@@ -7,6 +7,7 @@ parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default=
 parser.add_argument("--seed",type=int, dest='seed', default=None, help='random seed for orientation' )
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true', help="seed the random number generator with worker Id")
+parser.add_argument("--masterscale", type=float, default=None)
 parser.add_argument("--add-bg", dest="add_bg",action='store_true',help="add background" )
 parser.add_argument("--add-noise", dest="add_noise",action='store_true',help="add noise" )
 parser.add_argument("--profile", dest="profile", type=str, default=None,
@@ -113,7 +114,7 @@ def main(rank):
 
     crystal = CrystalFactory.from_dict(cryst_descr)
     print("Rank %d Begin" % worker_Id)
-    for i_data in range( args.num_trials):
+    for i_data in range(args.num_trials):
         h5name = "%s_rank%d_data%d.h5" % (ofile, worker_Id, i_data)
         h5name = os.path.join( odirj, h5name)
         if os.path.exists(h5name) and not args.overwrite:
@@ -185,6 +186,7 @@ def main(rank):
                     'only_water':only_water, 
                     'device_Id':device_Id, 
                     'div_tup':div_tup, 
+                    'master_scale': args.masterscale,
                     'gimmie_Patt':True, 
                     'adc_offset':adc_offset, 
                     'show_params':args.show_params,
@@ -267,9 +269,14 @@ def main(rank):
         #assert( np.mean(all_rots) < 1e-7) 
 
         if args.write_img:
+            
             print "SAVING DATAFILE"
+            np.savez(h5name+".npz",
+                img=simsDataSum[0].astype(np.float32),
+                det=DET.to_dict(), beam=BEAM.to_dict())
+            
             fout = h5py.File(h5name,"w" ) 
-            fout.create_dataset("bigsim_d9114", data=simsDataSum[0].astype(np.float32), compression='lzf')
+            #fout.create_dataset("bigsim_d9114", data=simsDataSum[0].astype(np.float32), compression='lzf')
             fout.create_dataset("crystalA", data=crystal.get_A() )
             fout.create_dataset("crystalU", data=crystal.get_U() )
             fout.create_dataset("spectrum", data=data_fluxes)

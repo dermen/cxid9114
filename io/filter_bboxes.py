@@ -1,25 +1,36 @@
 
 
+
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 rank = comm.rank
 size = comm.size
 
+if rank==0:
+    from argparse import ArgumentParser
+    parser = ArgumentParser("options to filter bboxes on each shot")
+    parser.add_argument("--plot",default=None, type=float) 
+    args = parser.parse_args()
+
 # import functions on rank 0 only
 if rank==0:
     from h5py import File as h5py_File
+    from numpy import load as numpy_load
     from cxid9114.integrate.integrate_utils import Integrator
     from numpy import array, sqrt, percentile
     from numpy import zeros as np_zeros
     from numpy import sum as np_sum
     from psutil import Process
     from os import getpid
+    import pylab as plt
 else:
     h5py_File = None
+    numpy_load = None
     Integrator = None
     array = sqrt = percentile = np_zeros = np_sum = None
     Process = None
     getpid = None
+    args =0
 
 h5py_File = comm.bcast(h5py_File, root=0)
 Integrator = comm.bcast(Integrator, root=0)
@@ -30,6 +41,8 @@ np_zeros = comm.bcast(np_zeros, root=0)
 np_sum = comm.bcast(np_sum, root=0)
 Process = comm.bcast(Process, root=0)
 getpid = comm.bcast( getpid, root=0)
+numpy_load = comm.bcast(numpy_load, root=0)
+args = comm.bcast(args, root=0)
 
 def get_memory_usage():
     """Return the memory usage in Mo."""
@@ -45,15 +58,15 @@ def get_memory_usage():
 
 #@profile
 def main():
-
     # some parameters
     int_radius = 5
     gain = 28
-
-
     # data is stored in 39 h5py_Files
-    Nfiles = 39
-    fname_template = "/global/project/projectdirs/lcls/dermen/process_rank%d.h5"
+    Nfiles = 2
+    resmin = 2.5
+    resmax = 5.5
+    min_snr = 2
+    fname_template = "/global/homes/d/dermen/cxid9114/indexing/proc/process_rank%d.h5"
     fnames = [fname_template % i_f for i_f in range( Nfiles)]
 
     # NOTE: for reference, inside each h5 file there is 
@@ -106,10 +119,15 @@ def main():
         
         # load the dxtbx image data directly:
         img_path = h["h5_path"][shot_idx]
-        img_h5 = h5py_File(img_path, "r")
-        img_data = img_h5["bigsim_d9114"][()]  # LZF decompression, but not a bottleneck
-       
+        img_data = numpy_load(img_path)["img"]
+        h5_path = img_path.replace(".npz", "")
         bboxes = h["bboxes"]["shot%d" % shot_idx][()]
+        hi, ki, li = h["Hi"]["shot%d" % shot_idx][()].T
+        nspots = len(bboxes)
+      
+        reso = 1/sqrt( (hi**2 + ki**2)/79./79 + li**2 /38/38)
+       
+        in_reso_ring = array([ resmin < d < resmax for d in reso])
        
         # Dirty integrator, sets integration region as disk of diameter 2*int_radius pixels
         I = Integrator(img_data, int_radius=int_radius, gain=gain)
@@ -119,8 +137,25 @@ def main():
         s,b,var = map(array, zip(*int_data) )
         snr = s / sqrt(var)
 
+        # find the max snr of the kept spots in the resolution ring
+        max_snr_in_ring = max([val for i_spot,val in enumerate(snr) if in_reso_ring[i_spot]])
+
         # keep the top 10% 
-        is_a_keeper =  snr > percentile(snr, 90)
+        #is_a_keeper =  snr > percentile(snr, 90)
+        is_a_keeper = [in_reso_ring[i_spot] and snr[i_spot] > min_snr for i_spot in range(nspots)]
+        print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
+
+        if rank==0 and args.plot is not None:
+            plt.gcf().clear()
+            plt.imshow(img_data, vmax=250, cmap='viridis')
+            for i_spot in range(nspots):
+                if not is_a_keeper[i_spot]:
+                    continue
+                x1,x2,y1,y2 = bboxes[i_spot]
+                patch = plt.Rectangle(xy=(x1,y1), width=x2-x1, height=y2-y1, fc='none', ec='r')   
+                plt.gca().add_patch(patch)
+            plt.draw()
+            plt.pause(args.plot)
 
         kept_bboxes = [bboxes[i_bb] for i_bb in range(len(bboxes)) if is_a_keeper[i_bb]]
 
