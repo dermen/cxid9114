@@ -4,6 +4,11 @@ from mpi4py import MPI
 comm = MPI.COMM_WORLD
 rank = comm.rank
 size = comm.size
+    
+from dxtbx.model.detector import DetectorFactory
+det_from_dict = DetectorFactory.from_dict
+from dxtbx.model.beam import BeamFactory
+beam_from_dict = BeamFactory.from_dict
 
 # import functions on rank 0 only
 if rank==0:
@@ -14,6 +19,7 @@ if rank==0:
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--Nmax", type=int, default=-1, help='Max number of images to process per rank')
+    parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--curvatures", action='store_true')
     args = parser.parse_args()
     from h5py import File as h5py_File
@@ -29,10 +35,6 @@ if rank==0:
     import resource
     RUSAGE_SELF = resource.RUSAGE_SELF
     from simtbx.diffBragg.refiners.crystal_systems import TetragonalManager
-    from dxtbx.model.detector import DetectorFactory
-    det_from_dict = DetectorFactory.from_dict
-    from dxtbx.model.beam import BeamFactory
-    beam_from_dict = BeamFactory.from_dict
     from dxtbx.model import Crystal
     from scitbx.matrix import sqr
     from simtbx.diffBragg.sim_data import SimData
@@ -53,13 +55,16 @@ if rank==0:
     Fhkl_guess = data_sf[edge_idx]
     wavelens = ENERGY_CONV / data_energies
 
+    from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
+
 else:
+    diff_rot = None
     compare_with_ground_truth = None
     args = None
     RefineAll = None
     nanoBragg_beam = nanoBragg_crystal = None
     SimData = None
-    beam_from_dict = det_from_dict = None
+    #beam_from_dict = det_from_dict = None
     h5py_File = None
     Integrator = None
     array = sqrt = percentile = np_zeros = np_sum = None
@@ -73,6 +78,7 @@ else:
     sqr = None
     Fhkl_guess = wavelens = None
 
+diff_rot = comm.bcast(diff_rot)
 compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
 args = comm.bcast(args, root=0)
 RefineAll = comm.bcast(RefineAll, root=0)
@@ -99,9 +105,9 @@ getrusage = comm.bcast(getrusage, root=0)
 RUSAGE_SELF = comm.bcast(RUSAGE_SELF, root=0)
 TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
-import sys
-log_file = "%s/rank%d.log" % (args.logdir, rank)
-sys.stdout = open(log_file, "w")
+#import sys
+#log_file = "%s/rank%d.log" % (args.logdir, rank)
+#sys.stdout = open(log_file, "w")
 
 
 class BigData:
@@ -163,6 +169,8 @@ class BigData:
         Ntot = 0
         self.all_bbox_pixels = []
         for img_num, (fname_idx, shot_idx) in  enumerate( my_shots):
+            if img_num==0:
+                continue
             if img_num == args.Nmax:
                 #print("Already processed maximum number images!")
                 continue
@@ -185,7 +193,8 @@ class BigData:
             c_real = amat_elems[6:]
 
             # dxtbx indexed crystal model
-            C = Crystal(a_real, b_real, c_real, "P1")
+            C = Crystal(a_real, b_real, c_real, "P43212")
+            
             # change basis here ? Or maybe just average a/b
             a,b,c,_,_,_ = C.get_unit_cell().parameters()
             a_init = .5*(a+b)
@@ -209,14 +218,25 @@ class BigData:
             Ntot += sum(tot_pix)
 
             # actually load the pixels...  
-            data_boxes = [ img[j1:j2, i1:i2] for i1,i2,j1,j2 in bboxes]
+            #data_boxes = [ img[j1:j2, i1:i2] for i1,i2,j1,j2 in bboxes]
 
             # Here we will try a per-shot refinement of the unit cell and Umatrix, as well as ncells abc
             # and spot scale etc..
 
-            # load the spectrum
-            h5_fname = h["h5_path"][0].replace(".npz", "")
+            # load some ground truth data from the simulation dumps (e.g. spectrum)
+            h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
             data = h5py_File(h5_fname, "r")
+
+            tru = sqr(data["crystalA"][()]).inverse().elems
+            a_tru = tru[:3]
+            b_tru = tru[3:6]
+            c_tru = tru[6:]
+            C_tru = Crystal(a_tru, b_tru, c_tru, "P43212")
+            try:
+                angular_offset_init = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
+            except Exception as err:
+                print("Boo cant use the comparison w GT function: %s" % err)
+
             fluxes = data["spectrum"][()]
             es = data["exposure_s"][()]
             fluxes *= es  # multiply by the exposure time
@@ -225,17 +245,21 @@ class BigData:
             spectrum = [(wave, flux) for wave,flux in spectrum if flux > self.flux_min]
 
             # make a unit cell manager that the refiner will use to track the B-matrix
+            #aa,__,cc,_,_,_ = C_tru.get_unit_cell().parameters()
+            #ucell_man = TetragonalManager(a=aa, c=cc)
             ucell_man = TetragonalManager(a=a_init, c=c_init)
 
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
             nbcryst = nanoBragg_crystal()
+            #nbcryst.dxtbx_crystal = C_tru
             nbcryst.dxtbx_crystal = C
+
             nbcryst.thick_mm = 0.1
-            nbcryst.Ncells_abc = 30, 30, 30
+            nbcryst.Ncells_abc = 28, 28, 28
             nbcryst.miller_array = Fhkl_guess.as_amplitude_array()
-            nbcryst.n_mos_domains =  1 #10
-            nbcryst.mos_spread_deg = 0.01
+            nbcryst.n_mos_domains =  1
+            nbcryst.mos_spread_deg = 0.0
 
             # create a nanoBragg beam
             nbbeam = nanoBragg_beam()
@@ -250,13 +274,12 @@ class BigData:
             SIM.crystal = nbcryst
             SIM.beam = nbbeam
 
-            spot_scale = 12
+            spot_scale = 6
             SIM.instantiate_diffBragg()
             SIM.D.spot_scale = spot_scale
 
             img_in_photons = img / self.gain
-            if rank==0:
-                print("Starting refinement!")
+            print("Rank %d, Starting refinement!" % rank)
             RUC = RefineAll(
                 spot_rois=bboxes,
                 abc_init=tilt_abc,
@@ -277,32 +300,29 @@ class BigData:
             RUC.refine_crystal_scale = True
             RUC.refine_gain_fac =  False
             RUC.plot_stride = args.stride
-            RUC.trad_conv_eps = 1e-5
+            RUC.trad_conv_eps = 5e-3 #1e-5
             RUC.max_calls = 300
             RUC.verbose = False
-            if rank==0:  # only show refinement stats for rank 0
-                RUC.verbose = True
+            if args.verbose:
+                if rank==0:  # only show refinement stats for rank 0
+                    RUC.verbose = True
             RUC.run()
             if RUC.hit_break_to_use_curvatures:
                 RUC.use_curvatures = True
-                RUC.run()
+                RUC.run(setup=False)
 
+            #try:
+            angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
+            C.rotate_around_origin(ax, angle)
+            C.set_B(RUC.get_refined_Bmatrix())
+            a_ref, _, c_ref, _, _, _ = C.get_unit_cell().parameters()
+            # compute missorientation with ground truth model
             try:
-                angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
-                C.rotate_around_origin(ax, angle)
-                C.set_B(RUC.get_refined_Bmatrix)
-                # load the ground truth crystal real space unit vectors and compare with refined version..
-                tru = sqr(data["crystalA"][()]).inverse().elems
-                a_tru = tru[:3]
-                b_tru = tru[3:6]
-                c_tru = tru[6:]
-
-                # compute missorientation with ground truth model
                 angular_offset = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
-                a_ref, _, c_ref, _, _, _ = C.get_unit_cell().parameters()
-                print("filename=%s, angular offset=%f, a=%f, c=%f" % (data.filename, angular_offset, a_ref, c_ref))
-            except:
-                print("filename=%s, unknown error" % data.filename)
+                print("Rank %d, filename=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
+                    rank, data.filename, angular_offset, angular_offset_init, a_ref, a_init, c_ref, c_init))
+            except Exception as err:
+                print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
 
             del img  # not sure if needed here..
             del img_in_photons
@@ -323,13 +343,12 @@ class BigData:
       
         print ("Rank %d; all subimages loaded!" % rank) 
 
-
-if __name__=="__main__" :
-    #sys.stdout = open()
-    B = BigData()
-    Nfiles = 10
-    fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg/process_rank%d.h5"
-    fnames = [fname_template % i_f for i_f in range( Nfiles)]
-    B.fnames = fnames
-    B.load()
+#sys.stdout = open()
+B = BigData()
+Nfiles = 10
+#fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg_sg96/process_rank%d.h5"
+fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg/process_rank%d.h5"
+fnames = [fname_template % i_f for i_f in range( Nfiles)]
+B.fnames = fnames
+B.load()
 

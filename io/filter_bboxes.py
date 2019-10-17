@@ -64,7 +64,7 @@ def main():
     resmin = 2.5
     resmax = 3.5
     min_snr = 5
-    fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg/process_rank%d.h5"
+    fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg_sg96/process_rank%d.h5"
     fnames = [fname_template % i_f for i_f in range( Nfiles)]
 
     # NOTE: for reference, inside each h5 file there is 

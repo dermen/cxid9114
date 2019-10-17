@@ -1,6 +1,6 @@
 
 
-def compare_with_ground_truth(a, b, c, dxcryst_models, symbol="C121"):
+def compare_with_ground_truth(a, b, c, dxcryst_models, symbol="C121", verbose=False):
     """
     :param a: ground truth a (real space)
     :param b: ground truth b (real space)
@@ -38,13 +38,15 @@ def compare_with_ground_truth(a, b, c, dxcryst_models, symbol="C121"):
             crystal_orientation.basis_type.direct)
 
         C2_ground_truth = header_Ori.change_basis(CB_OP_C_P.inverse())
-        C2_ground_truth.show(legend="C2_ground_truth")
+        if verbose:
+            C2_ground_truth.show(legend="C2_ground_truth")
 
         # align integrated model with ground truth
         cb_op_align = integrated_Ori.best_similarity_transformation(C2_ground_truth, 50, 1)
         aligned_Ori = integrated_Ori.change_basis(sqr(cb_op_align))
-        aligned_Ori.show(legend="integrated, aligned")
-        print("alignment matrix", cb_op_align)
+        if verbose:
+            aligned_Ori.show(legend="integrated, aligned")
+            print("alignment matrix", cb_op_align)
 
         U_integrated = aligned_Ori.get_U_as_sqr()
         U_ground_truth = C2_ground_truth.get_U_as_sqr()
@@ -55,8 +57,6 @@ def compare_with_ground_truth(a, b, c, dxcryst_models, symbol="C121"):
         aoff = aligned_Ori.a.angle(C2_ground_truth.a, deg=True)
         boff = aligned_Ori.b.angle(C2_ground_truth.b, deg=True)
         coff = aligned_Ori.c.angle(C2_ground_truth.c, deg=True)
-        # solved:  the reason missetting_rot doesn't exactly align postref and ground_truth is
-        # that it's a monoclinic lattice, not orthorhombic.  Difference in the beta angle prevents exact alignment
 
         hyp = flex.mean(flex.double((aoff, boff, coff)))
         angles.append(hyp)
