@@ -289,6 +289,7 @@ def main(rank):
             fout.create_dataset("profile", data=profile)
             fout.create_dataset("xtal_size_mm", data=xtal_size_mm)
             fout.create_dataset("spot_scale", data=spot_scale)
+            fout.create_dataset("gain", data=GAIN)
             fout.close()  
 
         print("DonDonee")

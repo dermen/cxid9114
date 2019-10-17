@@ -1,6 +1,4 @@
 
-
-
 from mpi4py import MPI
 comm = MPI.COMM_WORLD
 rank = comm.rank
@@ -62,11 +60,11 @@ def main():
     int_radius = 5
     gain = 28
     # data is stored in 39 h5py_Files
-    Nfiles = 2
+    Nfiles = 10
     resmin = 2.5
-    resmax = 5.5
-    min_snr = 2
-    fname_template = "/global/homes/d/dermen/cxid9114/indexing/proc/process_rank%d.h5"
+    resmax = 3.5
+    min_snr = 5
+    fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg/process_rank%d.h5"
     fnames = [fname_template % i_f for i_f in range( Nfiles)]
 
     # NOTE: for reference, inside each h5 file there is 
@@ -124,8 +122,9 @@ def main():
         bboxes = h["bboxes"]["shot%d" % shot_idx][()]
         hi, ki, li = h["Hi"]["shot%d" % shot_idx][()].T
         nspots = len(bboxes)
-      
-        reso = 1/sqrt( (hi**2 + ki**2)/79./79 + li**2 /38/38)
+
+        # use the known cell to compute the resolution of the spots
+        reso = 1/sqrt( (hi**2 + ki**2)/79./79. + li**2 /38./38.)
        
         in_reso_ring = array([ resmin < d < resmax for d in reso])
        
@@ -133,17 +132,13 @@ def main():
         I = Integrator(img_data, int_radius=int_radius, gain=gain)
         int_data = [I.integrate_bbox_dirty( bb) for bb in bboxes]
         
-        # signal, background, variance  # these are the Leslie '99 terms
+        # signal, background, variance  # these are from the paper Leslie '99
         s,b,var = map(array, zip(*int_data) )
         snr = s / sqrt(var)
 
-        # find the max snr of the kept spots in the resolution ring
-        max_snr_in_ring = max([val for i_spot,val in enumerate(snr) if in_reso_ring[i_spot]])
-
-        # keep the top 10% 
-        #is_a_keeper =  snr > percentile(snr, 90)
         is_a_keeper = [in_reso_ring[i_spot] and snr[i_spot] > min_snr for i_spot in range(nspots)]
-        print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
+        if rank==0:
+            print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
 
         if rank==0 and args.plot is not None:
             plt.gcf().clear()
@@ -159,12 +154,10 @@ def main():
 
         kept_bboxes = [bboxes[i_bb] for i_bb in range(len(bboxes)) if is_a_keeper[i_bb]]
 
-        data_boxes = [ img_data[j1:j2, i1:i2] for i_bb,(i1,i2,j1,j2) in enumerate(kept_bboxes)]
-
         tot_pix = [ (j2-j1)*(i2-i1) for i_bb,(i1,i2,j1,j2) in enumerate(kept_bboxes)]
         Ntot += sum(tot_pix)
-
-        print "%g total pixels (file %d / %d)" % (Ntot, img_num+1, len(my_shots))
+        if rank==0:
+            print "%g total pixels (file %d / %d)" % (Ntot, img_num+1, len(my_shots))
         all_kept_bbox += map(list, kept_bboxes)
         all_is_kept_flags += [(fname_idx, shot_idx, is_a_keeper)]   # store this information, write to disk
   
