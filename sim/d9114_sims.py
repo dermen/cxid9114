@@ -8,10 +8,12 @@ parser.add_argument("--seed",type=int, dest='seed', default=None, help='random s
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true', help="seed the random number generator with worker Id")
 parser.add_argument("--masterscale", type=float, default=None)
+parser.add_argument("--readoutnoise", action="store_true")
 parser.add_argument("--add-bg", dest="add_bg",action='store_true',help="add background" )
 parser.add_argument("--add-noise", dest="add_noise",action='store_true',help="add noise" )
 parser.add_argument("--profile", dest="profile", type=str, default=None,
     choices=["gauss", "round", "square", "tophat"],help="shape of spots determined with this")
+parser.add_argument("--cspad", action="store_true")
 parser.add_argument("--make-background", dest='make_bg', action='store_true',
     help="Just make the background image and quit")
 parser.add_argument("--bg-name", dest='bg_name', default='background64.h5',
@@ -24,6 +26,7 @@ parser.add_argument("-trials", dest='num_trials', help='trials per worker',
     type=int, default=1 )
 parser.add_argument("--optimize-oversample", action='store_true')
 parser.add_argument("--show-params", action='store_true')
+parser.add_argument("--kernelspergpu", default=1, type=int, help="how many processes  accessing each gpu")
 parser.add_argument("--oversample", type=int, default=0)
 parser.add_argument("--Ncells", type=int, default=15)
 parser.add_argument("--xtal_size_mm", type=float, default=None)
@@ -45,7 +48,7 @@ ngpu_per_node = args.ngpu_per_node
 ofile = args.ofile
 div_tup = (0,0,0) #(0.13, .13, 0.06)  # horiz, verti, stpsz (mrads)
     
-kernels_per_gpu=1
+kernels_per_gpu=args.kernelspergpu
 smi_stride=5
 GAIN=28
 beam_diam_mm = 1.*1e-3
@@ -58,8 +61,7 @@ adc_offset = 0
 def main(rank):
 
     device_Id = rank % ngpu_per_node
-    
-    worker_Id = node_id*ngpu_per_node + rank  # support for running on multiple N-node GPUs to increase worker pool
+    worker_Id = rank #node_id*ngpu_per_node + rank  # support for running on multiple N-node GPUs to increase worker pool
     
     import os
     import sys
@@ -78,7 +80,19 @@ def main(rank):
     from cxid9114.sim import sim_utils
     #from cxid9114.refine.jitter_refine import make_param_list
     from cxid9114.geom.single_panel import DET, BEAM
-    
+    if args.cspad:  # use a cspad for simulation
+        from cxid9114.geom.multi_panel import CSPAD
+        #from dxtbx.model import Panel
+        # put this new CSPAD in the same plane as the single panel detector (originZ)
+        for pid in range(len(CSPAD)):
+            CSPAD[pid].set_trusted_range(DET[0].get_trusted_range())
+            #node_d = CSPAD[pid].to_dict()
+            #node_d["origin"] = node_d["origin"][0], node_d["origin"][1], DET[0].get_origin()[2]
+            #CSPAD[pid] = Panel.from_dict(node_d)
+        #from IPython import embed
+        #embed()
+        DET = CSPAD  # rename
+
     if args.use_rank_as_seed:
         np.random.seed(worker_Id)
     else:
@@ -162,8 +176,8 @@ def main(rank):
             print("MAKING BACKGROUND : just at two colors")
             data_fluxes = [ ave_flux_across_exp*.5, ave_flux_across_exp*.5]
             data_energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]  # should be 8944 and 9034
-            data_sf = [1,1]  # dont care about structure factors when simulating background water scatter
-            Ncells_abc = (10,10,10)
+            data_sf = [1, 1]  # dont care about structure factors when simulating background water scatter
+            Ncells_abc = 10, 10, 10
             only_water=True
         else:
             only_water=False
@@ -197,7 +211,7 @@ def main(rank):
             oversample = 1
             reference = None
             while 1:
-                sim_kwargs['oversample']=oversample
+                sim_kwargs['oversample'] = oversample
                 simsDataSum, PattFact = sim_utils.sim_colors(*sim_args, **sim_kwargs)
                 simsDataSum = np.array(simsDataSum)
                 
@@ -220,13 +234,24 @@ def main(rank):
         else:
             simsDataSum, PattFact = sim_utils.sim_colors(*sim_args, **sim_kwargs)
             #    
-            Umats = PattFact.Umats
             spot_scale = PattFact.spot_scale
             simsDataSum = np.array(simsDataSum)
+            if args.cspad:
+                assert simsDataSum.shape == (64, 185, 194)
         
         if make_background:
-            bg_out = h5py.File(bg_name, "w")
-            bg_out.create_dataset("bigsim_d9114",data=simsDataSum[0])
+            if args.cspad:
+                bg_out = h5py.File(bg_name, "w")
+                bg_out.create_dataset("bigsim_d9114", data=simsDataSum)
+                np.savez("testbg.npz", img=simsDataSum, 
+                    det=DET.to_dict(),
+                    beam=BEAM.to_dict())
+            else:
+                bg_out = h5py.File(bg_name, "w")
+                bg_out.create_dataset("bigsim_d9114", data=simsDataSum[0])
+                np.savez("testbg_mono.npz", img=simsDataSum[0], 
+                    det=DET.to_dict(),
+                    beam=BEAM.to_dict())
             print ("Background made! Saved to file %s" % bg_name)
             # force an exit here if making a background...
             sys.exit()
@@ -234,10 +259,15 @@ def main(rank):
         if add_background:
             print("ADDING BG")
             background = h5py.File(bg_name, "r")['bigsim_d9114'][()]
+            if args.cspad:
+                assert background.shape == (64, 185, 194)
             # background was made using average flux over all shots, so scale it up/down here
             bg_scale = data_fluxes.sum() / ave_flux_across_exp
             # TODO consider varying the background level to simultate jet thickness jitter
-            simsDataSum[0] += background * bg_scale
+            if args.cspad:
+                simsDataSum += background * bg_scale
+            else:
+                simsDataSum[0] += background * bg_scale
 
         if add_noise:
             print("ADDING NOISE")
@@ -247,14 +277,16 @@ def main(rank):
                 SIM.exposure_s = exposure_s
                 SIM.flux = np.sum(data_fluxes)
                 SIM.adc_offset_adu = adc_offset
-                SIM.detector_psf_kernel_radius_pixels=5;
-                SIM.detector_psf_type=shapetype.Unknown  # for CSPAD
+                #SIM.detector_psf_kernel_radius_pixels = 5
+                #SIM.detector_psf_type = shapetype.Unknown  # for CSPAD
                 SIM.detector_psf_fwhm_mm = 0
                 SIM.quantum_gain = GAIN
+                if not args.readoutnoise:
+                    SIM.readout_noise_adu = 0
                 SIM.raw_pixels = flex.double(simsDataSum[pidx].ravel())
                 SIM.add_noise()
                 simsDataSum[pidx] = SIM.raw_pixels.as_numpy_array()\
-                    .reshape(simsDataSum[0].shape)    
+                    .reshape(simsDataSum[pidx].shape)
                 SIM.free_all()
                 del SIM
 
@@ -271,9 +303,15 @@ def main(rank):
         if args.write_img:
             
             print "SAVING DATAFILE"
-            np.savez(h5name+".npz",
-                img=simsDataSum[0].astype(np.float32),
-                det=DET.to_dict(), beam=BEAM.to_dict())
+            if args.cspad:
+                np.savez(h5name+".npz",
+                     img=simsDataSum.astype(np.float32),
+                     det=DET.to_dict(), beam=BEAM.to_dict())
+
+            else:
+                np.savez(h5name+".npz",
+                    img=simsDataSum[0].astype(np.float32),
+                    det=DET.to_dict(), beam=BEAM.to_dict())
             
             fout = h5py.File(h5name,"w" ) 
             #fout.create_dataset("bigsim_d9114", data=simsDataSum[0].astype(np.float32), compression='lzf')

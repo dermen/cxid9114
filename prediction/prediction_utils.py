@@ -33,8 +33,8 @@ def refls_to_q(refls, detector, beam, update_table=False):
         q_vecs.append(s1-beam.get_s0())
 
     if update_table:
-        refls['s1'] = flex.vec3_double(tuple(map(tuple,s1_vecs)))
-        refls['rlp'] = flex.vec3_double(tuple(map(tuple,q_vecs)))
+        refls['s1'] = flex.vec3_double(tuple(map(tuple, s1_vecs)))
+        refls['rlp'] = flex.vec3_double(tuple(map(tuple, q_vecs)))
 
     return np.vstack(q_vecs)
 
@@ -99,26 +99,29 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         import pylab as plt
 
     color_data = {}
-    color_data["Q"] = []
-    color_data["H"] = []
-    color_data["Hi"] = []
-    color_data["x"] = []
-    color_data["y"] = []
-    color_data["Qmag"] = []
+    color_data["Q"] = []  # momentum transfer vector
+    color_data["H"] = []  # miller index fractional
+    color_data["Hi"] = []  # miller index
+    color_data["x"] = []  # fast scan coordinate in panel
+    color_data["y"] = []  # slow scane coordinate in panel
+    color_data["Qmag"] = []  # momentum transfer magnitude
+    color_data["panel"] = []  # panel id in detector model
+    # assume these are the same for all panels in the detector (it need only be approximate for te purpose here)
     detdist = detector[0].get_distance()
     pixsize = detector[0].get_pixel_size()[0]
     fs_dim, ss_dim = detector[0].get_image_size()
+    # FIXME: what about when same HKL indexed on different panels ?
     for refls, beam in zip(refls_at_colors, beams_of_colors):
-
         H, Hi, Q = refls_to_hkl(
             refls, detector, beam, crystal,  returnQ=True)
 
+        color_data["panel"].append(list(refls['panel']))
         color_data["Q"].append(list(Q))
         color_data["H"].append(list(H))
         color_data["Hi"].append(list(map(tuple, Hi)))
         Qmag = np.linalg.norm(Q, axis=1)
         if twopi_conv:
-            Qmag*=2*np.pi
+            Qmag *= 2*np.pi
 
         x, y, _ = xyz_from_refl(refls)
         color_data["x"].append(x)
@@ -132,21 +135,35 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     all_x, all_y, all_H = [], [], []
     patches = []
     bboxes = []
+    panel_ids = []
     for H in unique_indexed_Hi:
         x_com = 0
         y_com = 0
         Qmag = 0
         n_counts = 0
+        seen_pids = []  # how many different panel ids for this HKL - should be same pid across all colors
+        in_multiple_panels = False
         for i_color in range(len(beams_of_colors)):
             in_color = H in color_data["Hi"][i_color]
             if not in_color:
                 continue
-
             idx = color_data["Hi"][i_color].index(H)
+
+            pid = color_data["panel"][i_color][idx]
+            if pid not in seen_pids:
+                seen_pids.append(pid)
+            if len(seen_pids) > 1:
+                in_multiple_panels = True
+                break
             x_com += color_data["x"][i_color][idx] - 0.5
             y_com += color_data["y"][i_color][idx] - 0.5
             Qmag += color_data["Qmag"][i_color][idx]
             n_counts += 1
+
+        if in_multiple_panels:
+            continue
+        assert len(seen_pids) == 1  # sanity check, will remove
+        panel_ids.append(seen_pids[0])
         Qmag = Qmag / n_counts
         all_x.append(x_com / n_counts)
         all_y.append(y_com / n_counts)
@@ -163,7 +180,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         j1 = int(max(y_com - delrad/2., 0))
         j2 = int(min(y_com + delrad/2., ss_dim))
 
-        bboxes.append((i1,i2,j1,j2))   # i is fast scan, j is slow scan
+        bboxes.append((i1, i2, j1, j2))   # i is fast scan, j is slow scan
 
         if ret_patches:
             R = plt.Rectangle(xy=(x_com-delrad/2., y_com-delrad/2.),
@@ -176,9 +193,9 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     if ret_patches:
         patch_coll = mpl.collections.PatchCollection(patches,
                           match_original=True)
-        return list(unique_indexed_Hi), bboxes, patch_coll
+        return list(unique_indexed_Hi), bboxes, panel_ids, patch_coll
     else:
-        return list(unique_indexed_Hi), bboxes
+        return list(unique_indexed_Hi), bboxes, panel_ids
 
 
 def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids=None, **kwargs):

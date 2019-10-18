@@ -93,7 +93,7 @@ def msi(jid):
 
     skip_weak = False 
     skip_failed = True #False
-    skip_indexed = True #False 
+    skip_indexed = False 
     weak_shots_f = os.path.join(out_dir, "weak_shots.txt")
     failed_idx_f = os.path.join(out_dir, "failed_shots.txt")
     indexed_f = os.path.join(out_dir, "indexed_shots.txt")
@@ -158,7 +158,7 @@ def msi(jid):
         img_f = fnames[idx]
         
         loader = dxtbx.load(img_f)
-        iset = loader.get_imageset( filenames=[loader.get_image_file()] )    
+        iset = loader.get_imageset(filenames=[loader.get_image_file()] )
         DET = loader.get_detector()
         BEAM = loader.get_beam()
         El = ExperimentListFactory.from_imageset_and_crystal(iset, crystal=None)
@@ -196,7 +196,7 @@ def msi(jid):
         except (Sorry, RuntimeError, AssertionError) as error:
             print("####\nIndexingFailed  T_T \n####")
             print (error)
-            failed_shots.append( idx)
+            failed_shots.append(idx)
             try:
                 np.savetxt(failed_idx_f, failed_shots, fmt="%d")
             except:
@@ -226,9 +226,10 @@ def msi(jid):
 #        dump_pkl = os.path.join(out_dir,dumps_dir, "dump_%d_%s.pkl" % (idx, tag))
 #        utils.save_flex(dump,  dump_pkl)
 
+
 if __name__=="__main__":
-    from joblib import Parallel,delayed
-    Parallel(n_jobs=n_jobs)(\
-        delayed(msi)(jid) \
+    from joblib import Parallel, delayed
+    Parallel(n_jobs=n_jobs)(
+        delayed(msi)(jid)
         for jid in range(n_jobs))
 

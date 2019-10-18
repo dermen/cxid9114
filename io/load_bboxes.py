@@ -21,6 +21,8 @@ if rank==0:
     parser.add_argument("--Nmax", type=int, default=-1, help='Max number of images to process per rank')
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--curvatures", action='store_true')
+    parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
+    parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     args = parser.parse_args()
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
@@ -28,6 +30,7 @@ if rank==0:
     from numpy import zeros as np_zeros
     from numpy import sum as np_sum
     from psutil import Process
+    from glob import glob
     from os import getpid
     from numpy import load as numpy_load
     from resource import getrusage
@@ -40,7 +43,8 @@ if rank==0:
     from simtbx.diffBragg.sim_data import SimData
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
-    from simtbx.diffBragg.refiners import RefineAll
+    from simtbx.diffBragg.refiners import RefineAllMultiPanel
+    #from simtbx.diffBragg.refiners import RefineAll
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
@@ -61,7 +65,7 @@ else:
     diff_rot = None
     compare_with_ground_truth = None
     args = None
-    RefineAll = None
+    RefineAllMultiPanel = None
     nanoBragg_beam = nanoBragg_crystal = None
     SimData = None
     #beam_from_dict = det_from_dict = None
@@ -69,6 +73,7 @@ else:
     Integrator = None
     array = sqrt = percentile = np_zeros = np_sum = None
     Process = None
+    glob = None
     getpid = None
     numpy_load = None
     RUSAGE_SELF = None
@@ -78,10 +83,11 @@ else:
     sqr = None
     Fhkl_guess = wavelens = None
 
+glob = comm.bcast(glob)
 diff_rot = comm.bcast(diff_rot)
 compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
 args = comm.bcast(args, root=0)
-RefineAll = comm.bcast(RefineAll, root=0)
+RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
 Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
 wavelens = comm.bcast(wavelens, root=0)
 Crystal = comm.bcast(Crystal, root=0)
@@ -155,7 +161,7 @@ class BigData:
             h5s = None
         
         #Nshots_tot = comm.bcast( Nshots_tot, root=0)
-        shots_for_rank = comm.bcast( shots_for_rank, root=0)
+        shots_for_rank = comm.bcast(shots_for_rank, root=0)
         #h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
         
         my_shots =  shots_for_rank[rank]
@@ -164,13 +170,11 @@ class BigData:
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
-        my_unique_fids = set([fidx for fidx,_ in my_shots])
-        my_open_files = {fidx: h5py_File( fnames[fidx], "r") for fidx in my_unique_fids}
+        my_unique_fids = set([fidx for fidx, _ in my_shots])
+        my_open_files = {fidx: h5py_File(fnames[fidx], "r") for fidx in my_unique_fids}
         Ntot = 0
         self.all_bbox_pixels = []
         for img_num, (fname_idx, shot_idx) in  enumerate( my_shots):
-            if img_num==0:
-                continue
             if img_num == args.Nmax:
                 #print("Already processed maximum number images!")
                 continue
@@ -180,6 +184,8 @@ class BigData:
             npz_path = h["h5_path"][shot_idx]
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
+            if len(img.shape) == 2:  # if single panel>>
+                img = np.array([img])
 
             D = det_from_dict(img_handle["det"][()])
             B = beam_from_dict(img_handle["beam"][()])
@@ -208,13 +214,15 @@ class BigData:
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
+            panel_ids_dset = h["panel_ids"]["shot%d" % shot_idx]
 
             # apply the filters:
             bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             tilt_abc = [tilt_abc_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+            panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
 
             # how many pixels do we have
-            tot_pix = [ (j2-j1)*(i2-i1) for i1,i2,j1,j2 in bboxes]
+            tot_pix = [(j2-j1)*(i2-i1) for i1, i2, j1, j2 in bboxes]
             Ntot += sum(tot_pix)
 
             # actually load the pixels...  
@@ -235,7 +243,7 @@ class BigData:
             try:
                 angular_offset_init = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
             except Exception as err:
-                print("Boo cant use the comparison w GT function: %s" % err)
+                print("Rank %d: Boo cant use the comparison w GT function: %s" % (rank, err))
 
             fluxes = data["spectrum"][()]
             es = data["exposure_s"][()]
@@ -256,9 +264,9 @@ class BigData:
             nbcryst.dxtbx_crystal = C
 
             nbcryst.thick_mm = 0.1
-            nbcryst.Ncells_abc = 28, 28, 28
+            nbcryst.Ncells_abc = 30, 30, 30
             nbcryst.miller_array = Fhkl_guess.as_amplitude_array()
-            nbcryst.n_mos_domains =  1
+            nbcryst.n_mos_domains = 1
             nbcryst.mos_spread_deg = 0.0
 
             # create a nanoBragg beam
@@ -269,49 +277,54 @@ class BigData:
 
             # sim data instance
             SIM = SimData()
-
+            from IPython import embed
+            embed()
             SIM.detector = D
             SIM.crystal = nbcryst
             SIM.beam = nbbeam
 
-            spot_scale = 6
-            SIM.instantiate_diffBragg()
+            spot_scale = 12
+            SIM.instantiate_diffBragg(default_F=0)
             SIM.D.spot_scale = spot_scale
 
             img_in_photons = img / self.gain
             print("Rank %d, Starting refinement!" % rank)
-            RUC = RefineAll(
-                spot_rois=bboxes,
-                abc_init=tilt_abc,
-                img=img_in_photons,
-                SimData_instance=SIM,
-                plot_images=args.plot,
-                plot_residuals=args.residual,
-                ucell_manager=ucell_man)
+            try:
+                RUC = RefineAllMultiPanel(
+                    spot_rois=bboxes,
+                    abc_init=tilt_abc,
+                    img=img_in_photons,  # NOTE this is now a multi panel image
+                    SimData_instance=SIM,
+                    plot_images=args.plot,
+                    plot_residuals=args.residual,
+                    ucell_manager=ucell_man)
 
-            RUC.trad_conv = True
-            RUC.refine_detdist = False
-            RUC.refine_background_planes = False
-            RUC.refine_Umatrix = True
-            RUC.refine_Bmatrix = True
-            RUC.refine_ncells = True
-            RUC.use_curvatures = False #args.curvatures
-            RUC.calc_curvatures = True
-            RUC.refine_crystal_scale = True
-            RUC.refine_gain_fac =  False
-            RUC.plot_stride = args.stride
-            RUC.trad_conv_eps = 5e-3 #1e-5
-            RUC.max_calls = 300
-            RUC.verbose = False
-            if args.verbose:
-                if rank==0:  # only show refinement stats for rank 0
-                    RUC.verbose = True
-            RUC.run()
-            if RUC.hit_break_to_use_curvatures:
-                RUC.use_curvatures = True
-                RUC.run(setup=False)
+                RUC.panel_ids = panel_ids
+                RUC.trad_conv = True
+                RUC.refine_detdist = False
+                RUC.refine_background_planes = False
+                RUC.refine_Umatrix = True
+                RUC.refine_Bmatrix = True
+                RUC.refine_ncells = True
+                RUC.use_curvatures = False #args.curvatures
+                RUC.calc_curvatures = True
+                RUC.refine_crystal_scale = True
+                RUC.refine_gain_fac = False
+                RUC.plot_stride = args.stride
+                RUC.trad_conv_eps = 5e-3 #1e-5
+                RUC.max_calls = 300
+                RUC.verbose = False
+                if args.verbose:
+                    if rank == 0:  # only show refinement stats for rank 0
+                        RUC.verbose = True
+                RUC.run()
+                if RUC.hit_break_to_use_curvatures:
+                    RUC.use_curvatures = True
+                    RUC.run(setup=False)
+            except AssertionError as err:
+                print("Rank %d, filename %s Hit assertion error during refinement: %s" % (rank, data.filename, err))
+                continue
 
-            #try:
             angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
             C.rotate_around_origin(ax, angle)
             C.set_B(RUC.get_refined_Bmatrix())
@@ -323,6 +336,10 @@ class BigData:
                     rank, data.filename, angular_offset, angular_offset_init, a_ref, a_init, c_ref, c_init))
             except Exception as err:
                 print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
+
+            # free the memory from diffBragg instance
+            SIM.D.free_all()
+            RUC.S.D.free_all()  # FIXME: is it necessary to do twice?
 
             del img  # not sure if needed here..
             del img_in_photons
@@ -337,18 +354,14 @@ class BigData:
             # TODO: accumulate all pixels
             #self.all_bbox_pixels += data_boxes
 
-       
         for h in my_open_files.values():
             h.close() 
       
         print ("Rank %d; all subimages loaded!" % rank) 
 
-#sys.stdout = open()
+
 B = BigData()
-Nfiles = 10
-#fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg_sg96/process_rank%d.h5"
-fname_template ="/global/project/projectdirs/lcls/dermen/d9114_sims/tryA/agg/process_rank%d.h5"
-fnames = [fname_template % i_f for i_f in range( Nfiles)]
+fnames = glob(args.glob)
 B.fnames = fnames
 B.load()
 
