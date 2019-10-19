@@ -11,7 +11,7 @@ from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
 
 # import functions on rank 0 only
-if rank==0:
+if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--plot", action='store_true')
@@ -134,7 +134,7 @@ class BigData:
         #   [u'Amatrices', u'Hi', u'bboxes', u'h5_path']
         
         # get the total number of shots using worker 0
-        if rank==0:
+        if rank == 0:
             print("I am root. I am calculating total number of shots")
             h5s = [h5py_File(f, "r") for f in fnames]
             Nshots_per_file = [ h["h5_path"].shape[0] for h in h5s]
@@ -277,8 +277,6 @@ class BigData:
 
             # sim data instance
             SIM = SimData()
-            from IPython import embed
-            embed()
             SIM.detector = D
             SIM.crystal = nbcryst
             SIM.beam = nbbeam
@@ -305,13 +303,14 @@ class BigData:
                 RUC.refine_background_planes = False
                 RUC.refine_Umatrix = True
                 RUC.refine_Bmatrix = True
-                RUC.refine_ncells = True
+                RUC.refine_ncells = False #True
                 RUC.use_curvatures = False #args.curvatures
-                RUC.calc_curvatures = True
-                RUC.refine_crystal_scale = True
+                RUC.calc_curvatures = False #True
+                RUC.refine_crystal_scale = False #True
                 RUC.refine_gain_fac = False
                 RUC.plot_stride = args.stride
-                RUC.trad_conv_eps = 5e-3 #1e-5
+                #RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
+                RUC.trad_conv_eps = 1e-6
                 RUC.max_calls = 300
                 RUC.verbose = False
                 if args.verbose:
