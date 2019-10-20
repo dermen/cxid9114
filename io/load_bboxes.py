@@ -1,9 +1,15 @@
 
 
-from mpi4py import MPI
-comm = MPI.COMM_WORLD
-rank = comm.rank
-size = comm.size
+try:
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    rank = comm.rank
+    size = comm.size
+    has_mpi = True
+except ImportError:
+    rank = 0
+    size = 1
+    has_mpi = False
     
 from dxtbx.model.detector import DetectorFactory
 det_from_dict = DetectorFactory.from_dict
@@ -22,6 +28,7 @@ if rank == 0:
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--curvatures", action='store_true')
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
+    parser.add_argument("--local", action="store_true", help="debug flag for local run")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     args = parser.parse_args()
     from h5py import File as h5py_File
@@ -44,7 +51,7 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    #from simtbx.diffBragg.refiners import RefineAll
+    #from simtbx.diffBragg.refiners import RefineAll as RefineAllMultiPanel
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
@@ -83,37 +90,35 @@ else:
     sqr = None
     Fhkl_guess = wavelens = None
 
-glob = comm.bcast(glob)
-diff_rot = comm.bcast(diff_rot)
-compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
-args = comm.bcast(args, root=0)
-RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
-Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
-wavelens = comm.bcast(wavelens, root=0)
-Crystal = comm.bcast(Crystal, root=0)
-sqr = comm.bcast(sqr, root=0)
-nanoBragg_beam = comm.bcast(nanoBragg_beam, root=0)
-nanoBragg_crystal = comm.bcast(nanoBragg_crystal, root=0)
-SimData = comm.bcast(SimData, root=0)
-#beam_from_dict = comm.bcast(beam_from_dict, root=0)
-#det_from_dict = comm.bcast(det_from_dict, root=0)
-h5py_File = comm.bcast(h5py_File, root=0)
-Integrator = comm.bcast(Integrator, root=0)
-array = comm.bcast(array, root=0)
-sqrt = comm.bcast(sqrt, root=0)
-percentile = comm.bcast(percentile, root=0)
-np_zeros = comm.bcast(np_zeros, root=0)
-np_sum = comm.bcast(np_sum, root=0)
-Process = comm.bcast(Process, root=0)
-getpid = comm.bcast( getpid, root=0)
-numpy_load = comm.bcast(numpy_load, root=0)
-getrusage = comm.bcast(getrusage, root=0)
-RUSAGE_SELF = comm.bcast(RUSAGE_SELF, root=0)
-TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
-#import sys
-#log_file = "%s/rank%d.log" % (args.logdir, rank)
-#sys.stdout = open(log_file, "w")
+if has_mpi:
+    glob = comm.bcast(glob)
+    diff_rot = comm.bcast(diff_rot)
+    compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
+    args = comm.bcast(args, root=0)
+    RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
+    Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
+    wavelens = comm.bcast(wavelens, root=0)
+    Crystal = comm.bcast(Crystal, root=0)
+    sqr = comm.bcast(sqr, root=0)
+    nanoBragg_beam = comm.bcast(nanoBragg_beam, root=0)
+    nanoBragg_crystal = comm.bcast(nanoBragg_crystal, root=0)
+    SimData = comm.bcast(SimData, root=0)
+    #beam_from_dict = comm.bcast(beam_from_dict, root=0)
+    #det_from_dict = comm.bcast(det_from_dict, root=0)
+    h5py_File = comm.bcast(h5py_File, root=0)
+    Integrator = comm.bcast(Integrator, root=0)
+    array = comm.bcast(array, root=0)
+    sqrt = comm.bcast(sqrt, root=0)
+    percentile = comm.bcast(percentile, root=0)
+    np_zeros = comm.bcast(np_zeros, root=0)
+    np_sum = comm.bcast(np_sum, root=0)
+    Process = comm.bcast(Process, root=0)
+    getpid = comm.bcast( getpid, root=0)
+    numpy_load = comm.bcast(numpy_load, root=0)
+    getrusage = comm.bcast(getrusage, root=0)
+    RUSAGE_SELF = comm.bcast(RUSAGE_SELF, root=0)
+    TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
 
 class BigData:
@@ -143,13 +148,13 @@ class BigData:
 
             print("I am root. I will divide shots amongst workers.")
             shot_tuples = []
-            for i_f, fname in enumerate( fnames):
+            for i_f, fname in enumerate(fnames):
                 fidx_shotidx = [(i_f, i_shot) for i_shot in range(Nshots_per_file[i_f])] 
                 shot_tuples += fidx_shotidx
 
             from numpy import array_split
             print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
-            shots_for_rank = array_split( shot_tuples, size)
+            shots_for_rank = array_split(shot_tuples, size)
 
             # close the open h5s.. 
             for h in h5s:
@@ -161,12 +166,13 @@ class BigData:
             h5s = None
         
         #Nshots_tot = comm.bcast( Nshots_tot, root=0)
-        shots_for_rank = comm.bcast(shots_for_rank, root=0)
+        if has_mpi:
+            shots_for_rank = comm.bcast(shots_for_rank, root=0)
         #h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
         
-        my_shots =  shots_for_rank[rank]
+        my_shots = shots_for_rank[rank]
         if self.Nload is not None:
-            my_shots =  my_shots[:self.Nload]
+            my_shots = my_shots[:self.Nload]
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
@@ -182,8 +188,13 @@ class BigData:
            
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
+            # NOTE take me out!
+            if args.local:
+                import os
+                npz_path = os.path.basename(npz_path)
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
+
             if len(img.shape) == 2:  # if single panel>>
                 img = np.array([img])
 
@@ -214,12 +225,21 @@ class BigData:
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
-            panel_ids_dset = h["panel_ids"]["shot%d" % shot_idx]
+            # NOTE: remove commen
+            try:
+                panel_ids_dset = h["panel_ids"]["shot%d" % shot_idx]
+                has_panels = True
+            except KeyError:
+                has_panels = False
 
             # apply the filters:
             bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             tilt_abc = [tilt_abc_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
-            panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+            # NOTE: remove commen
+            if has_panels:
+                panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+            else:
+                panel_ids = [0]*len(tilt_abc)
 
             # how many pixels do we have
             tot_pix = [(j2-j1)*(i2-i1) for i1, i2, j1, j2 in bboxes]
@@ -233,6 +253,9 @@ class BigData:
 
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
+            # NOTE remove me
+            if args.local:
+                h5_fname = os.path.basename(h5_fname)
             data = h5py_File(h5_fname, "r")
 
             tru = sqr(data["crystalA"][()]).inverse().elems
@@ -250,10 +273,10 @@ class BigData:
             fluxes *= es  # multiply by the exposure time
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
-            spectrum = [(wave, flux) for wave,flux in spectrum if flux > self.flux_min]
+            spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
 
             # make a unit cell manager that the refiner will use to track the B-matrix
-            #aa,__,cc,_,_,_ = C_tru.get_unit_cell().parameters()
+            #aa, _, cc, _, _, _ = C_tru.get_unit_cell().parameters()
             #ucell_man = TetragonalManager(a=aa, c=cc)
             ucell_man = TetragonalManager(a=a_init, c=c_init)
 
@@ -303,14 +326,13 @@ class BigData:
                 RUC.refine_background_planes = False
                 RUC.refine_Umatrix = True
                 RUC.refine_Bmatrix = True
-                RUC.refine_ncells = False #True
-                RUC.use_curvatures = False #args.curvatures
-                RUC.calc_curvatures = False #True
+                RUC.refine_ncells = False  #True
+                RUC.use_curvatures = False # args.curvatures
+                RUC.calc_curvatures = True #args.curvatures
                 RUC.refine_crystal_scale = False #True
                 RUC.refine_gain_fac = False
                 RUC.plot_stride = args.stride
-                #RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-                RUC.trad_conv_eps = 1e-6
+                RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
                 RUC.max_calls = 300
                 RUC.verbose = False
                 if args.verbose:
@@ -337,16 +359,15 @@ class BigData:
                 print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
 
             # free the memory from diffBragg instance
-            SIM.D.free_all()
-            RUC.S.D.free_all()  # FIXME: is it necessary to do twice?
-
+            RUC.S.D.free_all()
             del img  # not sure if needed here..
             del img_in_photons
+
             # peak at the memory usage of this rank
             mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
             mem = mem / 1e6  # convert to GB
 
-            if rank==0:
+            if rank == 0:
                 print "RANK 0: %.2g total pixels in %d/%d bboxes (file %d / %d); MemUsg=%2.2g GB" \
                       % (Ntot, len(bboxes), n_bboxes_total,  img_num+1, len(my_shots), mem)
 
