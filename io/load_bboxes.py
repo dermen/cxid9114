@@ -27,8 +27,9 @@ if rank == 0:
     parser.add_argument("--Nmax", type=int, default=-1, help='Max number of images to process per rank')
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--curvatures", action='store_true')
+    parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
-    parser.add_argument("--local", action="store_true", help="debug flag for local run")
+    parser.add_argument("--testmode", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     args = parser.parse_args()
     from h5py import File as h5py_File
@@ -52,6 +53,7 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
     #from simtbx.diffBragg.refiners import RefineAll as RefineAllMultiPanel
+    from cxid9114.geom.multi_panel import CSPAD
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
@@ -78,6 +80,7 @@ else:
     #beam_from_dict = det_from_dict = None
     h5py_File = None
     Integrator = None
+    CSPAD = None
     array = sqrt = percentile = np_zeros = np_sum = None
     Process = None
     glob = None
@@ -101,6 +104,7 @@ if has_mpi:
     wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
     sqr = comm.bcast(sqr, root=0)
+    CSPAD = comm.bcast(CSPAD, root=0)
     nanoBragg_beam = comm.bcast(nanoBragg_beam, root=0)
     nanoBragg_crystal = comm.bcast(nanoBragg_crystal, root=0)
     SimData = comm.bcast(SimData, root=0)
@@ -189,7 +193,7 @@ class BigData:
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
             # NOTE take me out!
-            if args.local:
+            if args.testmode:
                 import os
                 npz_path = os.path.basename(npz_path)
             img_handle = numpy_load(npz_path)
@@ -198,7 +202,7 @@ class BigData:
             if len(img.shape) == 2:  # if single panel>>
                 img = np.array([img])
 
-            D = det_from_dict(img_handle["det"][()])
+            #D = det_from_dict(img_handle["det"][()])
             B = beam_from_dict(img_handle["beam"][()])
 
             # get the indexed crystal Amatrix
@@ -225,7 +229,6 @@ class BigData:
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
-            # NOTE: remove commen
             try:
                 panel_ids_dset = h["panel_ids"]["shot%d" % shot_idx]
                 has_panels = True
@@ -235,7 +238,6 @@ class BigData:
             # apply the filters:
             bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             tilt_abc = [tilt_abc_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
-            # NOTE: remove commen
             if has_panels:
                 panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             else:
@@ -254,7 +256,7 @@ class BigData:
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
             # NOTE remove me
-            if args.local:
+            if args.testmode:
                 h5_fname = os.path.basename(h5_fname)
             data = h5py_File(h5_fname, "r")
 
@@ -276,15 +278,17 @@ class BigData:
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
 
             # make a unit cell manager that the refiner will use to track the B-matrix
-            #aa, _, cc, _, _, _ = C_tru.get_unit_cell().parameters()
-            #ucell_man = TetragonalManager(a=aa, c=cc)
+            aa, _, cc, _, _, _ = C_tru.get_unit_cell().parameters()
             ucell_man = TetragonalManager(a=a_init, c=c_init)
+            if args.startwithtruth:
+                ucell_man = TetragonalManager(a=aa, c=cc)
 
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
             nbcryst = nanoBragg_crystal()
-            #nbcryst.dxtbx_crystal = C_tru
             nbcryst.dxtbx_crystal = C
+            if args.startwithtruth:
+                nbcryst.dxtbx_crystal = C_tru
 
             nbcryst.thick_mm = 0.1
             nbcryst.Ncells_abc = 30, 30, 30
@@ -300,9 +304,11 @@ class BigData:
 
             # sim data instance
             SIM = SimData()
-            SIM.detector = D
+            SIM.detector = CSPAD
+            #SIM.detector = D
             SIM.crystal = nbcryst
             SIM.beam = nbbeam
+            SIM.panel_id = 0  # default
 
             spot_scale = 12
             SIM.instantiate_diffBragg(default_F=0)
@@ -326,10 +332,10 @@ class BigData:
                 RUC.refine_background_planes = False
                 RUC.refine_Umatrix = True
                 RUC.refine_Bmatrix = True
-                RUC.refine_ncells = False  #True
-                RUC.use_curvatures = False # args.curvatures
-                RUC.calc_curvatures = True #args.curvatures
-                RUC.refine_crystal_scale = False #True
+                RUC.refine_ncells = True
+                RUC.use_curvatures = False  # args.curvatures
+                RUC.calc_curvatures = True  #args.curvatures
+                RUC.refine_crystal_scale = True
                 RUC.refine_gain_fac = False
                 RUC.plot_stride = args.stride
                 RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
@@ -362,6 +368,9 @@ class BigData:
             RUC.S.D.free_all()
             del img  # not sure if needed here..
             del img_in_photons
+
+            if args.testmode:
+                exit()
 
             # peak at the memory usage of this rank
             mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
