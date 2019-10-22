@@ -31,6 +31,7 @@ if rank == 0:
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--testmode", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
+    parser.add_argument("--split", action="store_true", help="split evaluation on a single rank")
     args = parser.parse_args()
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
@@ -327,6 +328,7 @@ class BigData:
                     ucell_manager=ucell_man)
 
                 RUC.panel_ids = panel_ids
+                RUC.split_evaluation = args.split
                 RUC.trad_conv = True
                 RUC.refine_detdist = False
                 RUC.refine_background_planes = False
