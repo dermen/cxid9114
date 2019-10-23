@@ -1,5 +1,4 @@
 
-
 try:
     from mpi4py import MPI
     comm = MPI.COMM_WORLD
@@ -10,7 +9,7 @@ except ImportError:
     rank = 0
     size = 1
     has_mpi = False
-    
+
 from dxtbx.model.detector import DetectorFactory
 det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
@@ -29,13 +28,12 @@ if rank == 0:
     parser.add_argument("--curvatures", action='store_true')
     parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
-    parser.add_argument("--testmode", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
-    parser.add_argument("--split", action="store_true", help="split evaluation on a single rank")
     args = parser.parse_args()
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
     from numpy import array, sqrt, percentile
+    from numpy import indices as np_indices
     from numpy import zeros as np_zeros
     from numpy import sum as np_sum
     from psutil import Process
@@ -53,7 +51,7 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    #from simtbx.diffBragg.refiners import RefineAll as RefineAllMultiPanel
+    # from simtbx.diffBragg.refiners import RefineAll as RefineAllMultiPanel
     from cxid9114.geom.multi_panel import CSPAD
 
     # let the root load the structure factors and energies to later broadcast
@@ -65,20 +63,21 @@ if rank == 0:
     from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW
     import numpy as np
     # grab the structure factors at the edge energy (ENERGY_LOW=8944 eV)
-    edge_idx = np.abs(data_energies-ENERGY_LOW).argmin()
+    edge_idx = np.abs(data_energies -ENERGY_LOW).argmin()
     Fhkl_guess = data_sf[edge_idx]
     wavelens = ENERGY_CONV / data_energies
 
     from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
 
 else:
+    np_indices = None
     diff_rot = None
     compare_with_ground_truth = None
     args = None
     RefineAllMultiPanel = None
     nanoBragg_beam = nanoBragg_crystal = None
     SimData = None
-    #beam_from_dict = det_from_dict = None
+    # beam_from_dict = det_from_dict = None
     h5py_File = None
     Integrator = None
     CSPAD = None
@@ -96,8 +95,9 @@ else:
 
 
 if has_mpi:
-    glob = comm.bcast(glob)
-    diff_rot = comm.bcast(diff_rot)
+    np_indices = comm.bcast(np_indices, root=0)
+    glob = comm.bcast(glob, root=0)
+    diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
@@ -109,8 +109,8 @@ if has_mpi:
     nanoBragg_beam = comm.bcast(nanoBragg_beam, root=0)
     nanoBragg_crystal = comm.bcast(nanoBragg_crystal, root=0)
     SimData = comm.bcast(SimData, root=0)
-    #beam_from_dict = comm.bcast(beam_from_dict, root=0)
-    #det_from_dict = comm.bcast(det_from_dict, root=0)
+    # beam_from_dict = comm.bcast(beam_from_dict, root=0)
+    # det_from_dict = comm.bcast(det_from_dict, root=0)
     h5py_File = comm.bcast(h5py_File, root=0)
     Integrator = comm.bcast(Integrator, root=0)
     array = comm.bcast(array, root=0)
@@ -126,23 +126,63 @@ if has_mpi:
     TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
 
-class BigData:
+class FatData:
 
     def __init__(self):
-        self.int_radius = 5
-        self.gain = 28
-        self.flux_min = 1e2
-        self.Nload = None
-        self.fnames = []
+        self.int_radius = 5  #
+        self.gain = 28  # gain of panels, can be refined, can be panel dependent
+        self.flux_min = 1e2  # minimum number of photons to simulate (assume flux is N-photons, e.g. 1 second exposure)
+        self.n_ucell_param = 2  # tetragonal cell
+        self.Nload = None  #
+        self.all_pix = 0
+        self.fnames = []  # the filenames containing the datas
+        self.per_image_refine_first = False  # do a per image refinement of crystal model prior to doing the global fat
+        self.all_spot_roi = {}  # one list per shot, rois are x1,x2,y1,y2 per reflection
+        self.all_abc_inits = {}  # one list per shot, abc_inits are a,b,c per reflection
+        self.all_panel_ids = {}  # one list per shot, panel_ids are single number per reflection
+        self.all_ucell_mans = {}  # one per shot, UcellManager instance (Tetragonal in this case)
+        self.all_spectra = {}  # one list of (wavelength, flux) tuples per shot
+        self.all_crystal_models = {}
+        self.all_crystal_GT = {}
+        self.all_xrel = {}
+        self.all_yrel = {}
+        self.all_nanoBragg_rois = {}
+        self.SIM = None  # simulator; one per rank!
 
-    #@profile
+    def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
+        # create the sim_data instance that the refiner will use to run diffBragg
+        # create a nanoBragg crystal
+        nbcryst = nanoBragg_crystal()
+        nbcryst.dxtbx_crystal = init_crystal
+        nbcryst.thick_mm = 0.1
+        nbcryst.Ncells_abc = 30, 30, 30
+        nbcryst.miller_array = init_miller_array
+        nbcryst.n_mos_domains = 1
+        nbcryst.mos_spread_deg = 0.0
+
+        # create a nanoBragg beam
+        nbbeam = nanoBragg_beam()
+        nbbeam.size_mm = 0.001
+        nbbeam.unit_s0 = init_beam.get_unit_s0()
+        nbbeam.spectrum = init_spectrum
+
+        # sim data instance
+        self.SIM = SimData()
+        self.SIM.detector = CSPAD
+        self.SIM.crystal = nbcryst
+        self.SIM.beam = nbbeam
+        self.SIM.panel_id = 0  # default
+        self.SIM.instantiate_diffBragg(default_F=0)
+        self.SIM.D.spot_scale = 12
+
+    # @profile
     def load(self):
 
         # some parameters
 
-        # NOTE: for reference, inside each h5 file there is 
+        # NOTE: for reference, inside each h5 file there is
         #   [u'Amatrices', u'Hi', u'bboxes', u'h5_path']
-        
+
         # get the total number of shots using worker 0
         if rank == 0:
             print("I am root. I am calculating total number of shots")
@@ -154,14 +194,14 @@ class BigData:
             print("I am root. I will divide shots amongst workers.")
             shot_tuples = []
             for i_f, fname in enumerate(self.fnames):
-                fidx_shotidx = [(i_f, i_shot) for i_shot in range(Nshots_per_file[i_f])] 
+                fidx_shotidx = [(i_f, i_shot) for i_shot in range(Nshots_per_file[i_f])]
                 shot_tuples += fidx_shotidx
 
             from numpy import array_split
             print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
             shots_for_rank = array_split(shot_tuples, size)
 
-            # close the open h5s.. 
+            # close the open h5s..
             for h in h5s:
                 h.close()
 
@@ -169,12 +209,12 @@ class BigData:
             Nshots_tot = None
             shots_for_rank = None
             h5s = None
-        
-        #Nshots_tot = comm.bcast( Nshots_tot, root=0)
+
+        # Nshots_tot = comm.bcast( Nshots_tot, root=0)
         if has_mpi:
             shots_for_rank = comm.bcast(shots_for_rank, root=0)
-        #h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
-        
+        # h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
+
         my_shots = shots_for_rank[rank]
         if self.Nload is not None:
             my_shots = my_shots[:self.Nload]
@@ -184,26 +224,22 @@ class BigData:
         my_unique_fids = set([fidx for fidx, _ in my_shots])
         my_open_files = {fidx: h5py_File(self.fnames[fidx], "r") for fidx in my_unique_fids}
         Ntot = 0
-        self.all_bbox_pixels = []
+
         for img_num, (fname_idx, shot_idx) in  enumerate( my_shots):
             if img_num == args.Nmax:
-                #print("Already processed maximum number images!")
+                # print("Already processed maximum number images!")
                 continue
             h = my_open_files[fname_idx]
-           
+
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
-            # NOTE take me out!
-            if args.testmode:
-                import os
-                npz_path = os.path.basename(npz_path)
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
 
             if len(img.shape) == 2:  # if single panel>>
-                img = np.array([img])
+                img = array([img])
 
-            #D = det_from_dict(img_handle["det"][()])
+            # D = det_from_dict(img_handle["det"][()])
             B = beam_from_dict(img_handle["beam"][()])
 
             # get the indexed crystal Amatrix
@@ -216,15 +252,15 @@ class BigData:
 
             # dxtbx indexed crystal model
             C = Crystal(a_real, b_real, c_real, "P43212")
-            
+
             # change basis here ? Or maybe just average a/b
             a, b, c, _, _, _ = C.get_unit_cell().parameters()
-            a_init = .5*(a+b)
+            a_init = .5 *( a +b)
             c_init = c
 
             # shoe boxes where we expect spots
             bbox_dset = h["bboxes"]["shot%d" % shot_idx]
-            n_bboxes_total = bbox_dset.shape[0] 
+            n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
             is_a_keeper = h["bboxes"]["keepers%d" % shot_idx][()]
 
@@ -242,23 +278,14 @@ class BigData:
             if has_panels:
                 panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             else:
-                panel_ids = [0]*len(tilt_abc)
+                panel_ids = [0 ] *len(tilt_abc)
 
             # how many pixels do we have
-            tot_pix = [(j2-j1)*(i2-i1) for i1, i2, j1, j2 in bboxes]
+            tot_pix = [(j2 -j1 ) *(i2 -i1) for i1, i2, j1, j2 in bboxes]
             Ntot += sum(tot_pix)
-
-            # actually load the pixels...  
-            #data_boxes = [ img[j1:j2, i1:i2] for i1,i2,j1,j2 in bboxes]
-
-            # Here we will try a per-shot refinement of the unit cell and Umatrix, as well as ncells abc
-            # and spot scale etc..
 
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
-            # NOTE remove me
-            if args.testmode:
-                h5_fname = os.path.basename(h5_fname)
             data = h5py_File(h5_fname, "r")
 
             tru = sqr(data["crystalA"][()]).inverse().elems
@@ -286,113 +313,149 @@ class BigData:
 
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
-            nbcryst = nanoBragg_crystal()
-            nbcryst.dxtbx_crystal = C
-            if args.startwithtruth:
-                nbcryst.dxtbx_crystal = C_tru
+            if img_num==0:  # only initialize the simulator after loading the first image
+                self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 
-            nbcryst.thick_mm = 0.1
-            nbcryst.Ncells_abc = 30, 30, 30
-            nbcryst.miller_array = Fhkl_guess.as_amplitude_array()
-            nbcryst.n_mos_domains = 1
-            nbcryst.mos_spread_deg = 0.0
-
-            # create a nanoBragg beam
-            nbbeam = nanoBragg_beam()
-            nbbeam.size_mm = 0.001
-            nbbeam.unit_s0 = B.get_unit_s0()
-            nbbeam.spectrum = spectrum
-
-            # sim data instance
-            SIM = SimData()
-            SIM.detector = CSPAD
-            #SIM.detector = D
-            SIM.crystal = nbcryst
-            SIM.beam = nbbeam
-            SIM.panel_id = 0  # default
-
-            spot_scale = 12
-            SIM.instantiate_diffBragg(default_F=0)
-            SIM.D.spot_scale = spot_scale
-
+            # load the image (NOTE: Dont forget to ditch its references!)
             img_in_photons = img / self.gain
-            print("Rank %d, Starting refinement!" % rank)
-            try:
-                RUC = RefineAllMultiPanel(
-                    spot_rois=bboxes,
-                    abc_init=tilt_abc,
-                    img=img_in_photons,  # NOTE this is now a multi panel image
-                    SimData_instance=SIM,
-                    plot_images=args.plot,
-                    plot_residuals=args.residual,
-                    ucell_manager=ucell_man)
 
-                RUC.panel_ids = panel_ids
-                RUC.split_evaluation = args.split
-                RUC.trad_conv = True
-                RUC.refine_detdist = False
-                RUC.refine_background_planes = False
-                RUC.refine_Umatrix = True
-                RUC.refine_Bmatrix = True
-                RUC.refine_ncells = True
-                RUC.use_curvatures = False  # args.curvatures
-                RUC.calc_curvatures = True  #args.curvatures
-                RUC.refine_crystal_scale = True
-                RUC.refine_gain_fac = False
-                RUC.plot_stride = args.stride
-                RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-                RUC.max_calls = 300
-                RUC.verbose = False
-                if args.verbose:
-                    if rank == 0:  # only show refinement stats for rank 0
-                        RUC.verbose = True
-                RUC.run()
-                if RUC.hit_break_to_use_curvatures:
-                    RUC.use_curvatures = True
-                    RUC.run(setup=False)
-            except AssertionError as err:
-                print("Rank %d, filename %s Hit assertion error during refinement: %s" % (rank, data.filename, err))
-                continue
+            # It might be useful or necessary to do a per image refinement prior to the global...
+            if self.per_image_refine_first:
+                raise NotImplementedError
+                print("Rank %d, Starting refinement!" % rank)
+                try:
+                    RUC = RefineAllMultiPanel(
+                        spot_rois=bboxes,
+                        abc_init=tilt_abc,
+                        img=img_in_photons,
+                        SimData_instance=SIM,
+                        plot_images=args.plot,
+                        plot_residuals=args.residual,
+                        ucell_manager=ucell_man)
 
-            angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
-            C.rotate_around_origin(ax, angle)
-            C.set_B(RUC.get_refined_Bmatrix())
-            a_ref, _, c_ref, _, _, _ = C.get_unit_cell().parameters()
-            # compute missorientation with ground truth model
-            try:
-                angular_offset = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
-                print("Rank %d, filename=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
-                    rank, data.filename, angular_offset, angular_offset_init, a_ref, a_init, c_ref, c_init))
-            except Exception as err:
-                print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
+                    RUC.panel_ids = panel_ids
+                    RUC.split_evaluation = False #True
+                    RUC.trad_conv = True
+                    RUC.refine_detdist = False
+                    RUC.refine_background_planes = False
+                    RUC.refine_Umatrix = True
+                    RUC.refine_Bmatrix = True
+                    RUC.refine_ncells = True
+                    RUC.use_curvatures = False  # args.curvatures
+                    RUC.calc_curvatures = True  # args.curvatures
+                    RUC.refine_crystal_scale = True
+                    RUC.refine_gain_fac = False
+                    RUC.plot_stride = args.stride
+                    RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
+                    RUC.max_calls = 300
+                    RUC.verbose = False
+                    if args.verbose:
+                        if rank == 0:  # only show refinement stats for rank 0
+                            RUC.verbose = True
+                    RUC.run()
+                    if RUC.hit_break_to_use_curvatures:
+                        RUC.use_curvatures = True
+                        RUC.run(setup=False)
+                except AssertionError as err:
+                    print("Rank %d, filename %s Hit assertion error during refinement: %s" % (rank, data.filename, err))
+                    continue
 
-            # free the memory from diffBragg instance
-            RUC.S.D.free_all()
+                angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
+                C.rotate_around_origin(ax, angle)
+                C.set_B(RUC.get_refined_Bmatrix())
+                a_ref, _, c_ref, _, _, _ = C.get_unit_cell().parameters()
+                # compute missorientation with ground truth model
+                try:
+                    angular_offset = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
+                    print("Rank %d, filename=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
+                        rank, data.filename, angular_offset, angular_offset_init, a_ref, a_init, c_ref, c_init))
+                except Exception as err:
+                    print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
+
+                # free the memory from diffBragg instance
+                RUC.S.D.free_all()
+
+            # Here, takeout from the image only whats necessary to perform refinement
+            # first filter the spot rois so they dont occur exactly at the boundary of the image (inclusive range in nB)
+            assert len(img_in_photons.shape) == 3  # sanity
+            nslow, nfast = img_in_photons[0].shape
+            bboxes = array(bboxes)
+            for i_bbox, (_, x2, _, y2) in enumerate(bboxes):
+                if x2 == nfast:
+                    bboxes[i_bbox, 1] = x2 - 1  # update roi_xmax
+                if y2 == nslow:
+                    bboxes[i_bbox, 3] = y2 - 1  # update roi_ymax
+            # now cache the roi in nanoBragg format ((x1,x2), (y1,y1))
+            # and also cache the pixels and the coordinates
+
+            nanoBragg_rois = []  # special nanoBragg format
+            xrel, yrel, roi_img = [], [], []
+            for i_roi, (x1, x2, y1, y2) in enumerate(bboxes):
+                nanoBragg_rois.append(((x1, x2), (y1, y2)))
+                yr, xr = np_indices((y2 - y1 + 1, x2 - x1 + 1))
+                xrel.append(xr)
+                yrel.append(yr)
+                pid = panel_ids[i_roi]
+                roi_img.append(img_in_photons[pid, y1:y2 + 1, x1:x2 + 1])
+
+            # make sure to clear that damn memory
+            img = None
+            img_in_photons = None
             del img  # not sure if needed here..
             del img_in_photons
 
-            if args.testmode:
-                exit()
-
             # peak at the memory usage of this rank
-            mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
-            mem = mem / 1e6  # convert to GB
+            #mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
+            #mem = mem / 1e6  # convert to GB
+            mem = self._usage()
 
-            if rank == 0:
-                print "RANK 0: %.2g total pixels in %d/%d bboxes (file %d / %d); MemUsg=%2.2g GB" \
-                      % (Ntot, len(bboxes), n_bboxes_total,  img_num+1, len(my_shots), mem)
+            print "RANK %d: %.2g total pixels in %d/%d bboxes (file %d / %d); MemUsg=%2.2g GB" \
+                  % (rank, Ntot, len(bboxes), n_bboxes_total,  img_num +1, len(my_shots), mem)
+            self.all_pix += Ntot
 
-            # TODO: accumulate all pixels
-            #self.all_bbox_pixels += data_boxes
+            # TODO: accumulate per-shot information
+            self.all_spot_roi[img_num] = bboxes
+            self.all_abc_inits[img_num] = tilt_abc
+            self.all_panel_ids[img_num] = panel_ids
+            self.all_ucell_mans[img_num] = ucell_man
+            self.all_spectra[img_num] = spectrum
+            self.all_crystal_models[img_num] = C
+            self.all_crystal_GT[img_num] = C_tru
+            self.all_xrel[img_num] = xrel
+            self.all_yrel[img_num] = yrel
+            self.all_nanoBragg_rois[img_num] = nanoBragg_rois
 
         for h in my_open_files.values():
-            h.close() 
-      
-        print ("Rank %d; all subimages loaded!" % rank) 
+            h.close()
+
+        print ("Rank %d; all subimages loaded!" % rank)
+
+    def _usage(self):
+        mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
+        mem = mem / 1e6  # convert to GB
+        return mem
+
+    def tally_statistics(self):
+        n_images = len(self.all_spot_roi)
+        n_spot_per_image = [len(self.all_spot_roi[i_image]) for i_image in range(n_images)]
+        n_spot_tot = sum(n_spot_per_image)
+        #ave_spot_per_image = n_spot_tot / float(n_images)
+        total_pix = self.all_pix
+        n_rot_param = 3
+        n_ncell_param = 1
+        n_scale_param = 1
+        n_param_per_image = n_rot_param + self.n_ucell_param + n_ncell_param + n_scale_param
+        total_per_image_unknowns = n_param_per_image * n_images
+        mem = self._usage()
+
+        print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g"
+              % (rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
 
 
-B = BigData()
+B = FatData()
 fnames = glob(args.glob)
 B.fnames = fnames
 B.load()
+comm.Barrier()
+B.tally_statistics()
 

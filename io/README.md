@@ -1,3 +1,10 @@
+### Command to filter cspad bboxes:
+
+```
+srun -n1 -c1 --pty libtbx.python filter_bboxes.py   --glob "../indexing/agg/process_rank0.h5" --reslow 4 --reshigh 2.5 --snrmin 5
+```
+
+
 ### Test command
 
 ```
