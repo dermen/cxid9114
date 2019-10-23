@@ -4,6 +4,12 @@
 srun -n10 -c1 libtbx.python filter_bboxes.py   --glob "$DD/cspadA/agg/process_rank*.h5" --reslow 4 --reshigh 2.5 --snrmin 5
 ```
 
+### Command for global_bboxes
+
+```
+srun -n 10 -c1 -N1  libtbx.python global_bboxes.py --glob "$DD/cspadA/agg/process_rank*.h5"
+```
+
 
 ### Test command
 
