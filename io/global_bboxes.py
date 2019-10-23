@@ -17,6 +17,7 @@ beam_from_dict = BeamFactory.from_dict
 
 # import functions on rank 0 only
 if rank == 0:
+    import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--plot", action='store_true')
@@ -135,6 +136,7 @@ class FatData:
         self.n_ucell_param = 2  # tetragonal cell
         self.Nload = None  #
         self.all_pix = 0
+        self.time_load_start = 0
         self.fnames = []  # the filenames containing the datas
         self.per_image_refine_first = False  # do a per image refinement of crystal model prior to doing the global fat
         self.all_spot_roi = {}  # one list per shot, rois are x1,x2,y1,y2 per reflection
@@ -148,6 +150,7 @@ class FatData:
         self.all_yrel = {}
         self.all_nanoBragg_rois = {}
         self.SIM = None  # simulator; one per rank!
+        self.all_roi_imgs = {}
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
@@ -185,6 +188,7 @@ class FatData:
 
         # get the total number of shots using worker 0
         if rank == 0:
+            self.time_load_start = time.time()
             print("I am root. I am calculating total number of shots")
             h5s = [h5py_File(f, "r") for f in self.fnames]
             Nshots_per_file = [ h["h5_path"].shape[0] for h in h5s]
@@ -225,7 +229,7 @@ class FatData:
         my_open_files = {fidx: h5py_File(self.fnames[fidx], "r") for fidx in my_unique_fids}
         Ntot = 0
 
-        for img_num, (fname_idx, shot_idx) in  enumerate( my_shots):
+        for img_num, (fname_idx, shot_idx) in enumerate(my_shots):
             if img_num == args.Nmax:
                 # print("Already processed maximum number images!")
                 continue
@@ -424,6 +428,7 @@ class FatData:
             self.all_xrel[img_num] = xrel
             self.all_yrel[img_num] = yrel
             self.all_nanoBragg_rois[img_num] = nanoBragg_rois
+            self.all_roi_imgs[img_num] = roi_img
 
         for h in my_open_files.values():
             h.close()
@@ -448,8 +453,21 @@ class FatData:
         total_per_image_unknowns = n_param_per_image * n_images
         mem = self._usage()
 
-        print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g"
+        print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
               % (rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
+
+        comm.Barrier()
+        n_images = comm.reduce(n_images, MPI.SUM, root=0)
+        n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
+        total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
+        unknowns = comm.reduce(total_per_image_unknowns, MPI.SUM, root=0)
+        mem_tot = comm.reduce(mem, MPI.SUM, root=0)
+        if rank == 0:
+            print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
+            print("MPIWORLD: images=%d, spots=%d, pixels=%2.2g, unknowns=%d, usage=%2.2g GigaBytes"
+                  % (n_images, n_spot_tot, total_pix, unknowns, mem_tot))
+            print("Time to load= %.4f seconds" % (time.time()-self.time_load_start))
+            print("<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>\n")
 
 
 B = FatData()
