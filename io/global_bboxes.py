@@ -14,6 +14,7 @@ from dxtbx.model.detector import DetectorFactory
 det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
+from simtbx.diffBragg.refiners.global_refiner import FatRefiner
 
 # import functions on rank 0 only
 if rank == 0:
@@ -51,8 +52,6 @@ if rank == 0:
     from simtbx.diffBragg.sim_data import SimData
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
-    from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    # from simtbx.diffBragg.refiners import RefineAll as RefineAllMultiPanel
     from cxid9114.geom.multi_panel import CSPAD
 
     # let the root load the structure factors and energies to later broadcast
@@ -96,12 +95,12 @@ else:
 
 
 if has_mpi:
+    #FatRefiner = comm.bcast(FatRefiner, root=0)
     np_indices = comm.bcast(np_indices, root=0)
     glob = comm.bcast(glob, root=0)
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
-    RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
     Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
     wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
@@ -317,7 +316,7 @@ class FatData:
 
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
-            if img_num==0:  # only initialize the simulator after loading the first image
+            if img_num == 0:  # only initialize the simulator after loading the first image
                 self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 
             # load the image (NOTE: Dont forget to ditch its references!)
@@ -442,6 +441,7 @@ class FatData:
 
     def tally_statistics(self):
         n_images = len(self.all_spot_roi)
+        self.n_images = n_images
         n_spot_per_image = [len(self.all_spot_roi[i_image]) for i_image in range(n_images)]
         n_spot_tot = sum(n_spot_per_image)
         #ave_spot_per_image = n_spot_tot / float(n_images)
@@ -451,23 +451,89 @@ class FatData:
         n_scale_param = 1
         n_param_per_image = n_rot_param + self.n_ucell_param + n_ncell_param + n_scale_param
         total_per_image_unknowns = n_param_per_image * n_images
+        self.n_local_unknowns = total_per_image_unknowns
         mem = self._usage()
 
         print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
-              % (rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
+              % (comm.rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
 
         comm.Barrier()
         n_images = comm.reduce(n_images, MPI.SUM, root=0)
         n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
         total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
-        unknowns = comm.reduce(total_per_image_unknowns, MPI.SUM, root=0)
+        unknowns_per_rank = comm.gather(total_per_image_unknowns, root=0)
         mem_tot = comm.reduce(mem, MPI.SUM, root=0)
-        if rank == 0:
+
+        if comm.rank == 0:
+            unknowns = sum(unknowns_per_rank)
             print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
-            print("MPIWORLD: images=%d, spots=%d, pixels=%2.2g, unknowns=%d, usage=%2.2g GigaBytes"
+            print("MPIWORLD TOTALZ: images=%d, spots=%d, pixels=%2.2g, unknowns=%d, usage=%2.2g GigaBytes"
                   % (n_images, n_spot_tot, total_pix, unknowns, mem_tot))
-            print("Time to load= %.4f seconds" % (time.time()-self.time_load_start))
+            print("Total time elapsed= %.4f seconds" % (time.time()-self.time_load_start))
             print("<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>\n")
+
+            # determine where i the global parameter array does this ranks
+            # parameters begin
+            starts_per_rank = {}
+            xpos = 0
+            for _rank, n_unknown in enumerate(unknowns_per_rank):
+                starts_per_rank[_rank] = xpos
+                xpos += n_unknown
+        else:
+            starts_per_rank = None
+            unknowns = None
+
+        self.unknowns = comm.bcast(unknowns, root=0)
+        self.starts_per_rank = comm.bcast(starts_per_rank, root=0)
+
+    def refine(self):
+        self.RUC = FatRefiner(
+            n_global_params=self.unknowns,
+            n_local_params=self.n_local_unknowns,
+            local_idx_start=self.starts_per_rank[comm.rank],
+            shot_ucell_managers=self.all_ucell_mans,
+            shot_rois=self.all_spot_roi,
+            shot_nanoBragg_rois=self.all_nanoBragg_rois,
+            shot_roi_imgs=self.all_roi_imgs, shot_spectra=self.all_spectra,
+            shot_crystal_GTs=self.all_crystal_GT, shot_crystal_models=self.all_crystal_models,
+            shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
+            global_param_idx_start=self.unknowns-2,
+            shot_panel_ids=self.all_panel_ids)
+
+        self.RUC.plot_images = args.plot
+        self.RUC.plot_residuals = args.residual
+        self.RUC.setup_plots()
+        self.RUC.S = self.SIM
+        self.RUC.has_pre_cached_roi_data = True
+        self.RUC.split_evaluation = False
+        self.RUC.trad_conv = True
+        self.RUC.refine_detdist = False
+        self.RUC.refine_background_planes = False
+        self.RUC.refine_Umatrix = True
+        self.RUC.refine_Bmatrix = True
+        self.RUC.refine_ncells = True
+        self.RUC.use_curvatures = False  # args.curvatures
+        self.RUC.calc_curvatures = True  # args.curvatures
+        self.RUC.refine_crystal_scale = True
+        self.RUC.refine_gain_fac = True
+        self.RUC.plot_stride = args.stride
+        self.RUC.trad_conv_eps = 1e-4  # NOTE this is for single panel model
+        self.RUC.max_calls = 300
+        self.RUC.verbose = False
+        if args.verbose:
+            if rank == 0:  # only show refinement stats for rank 0
+                self.RUC.verbose = True
+        self.RUC._setup()
+        self.RUC.compute_functional_and_gradients()
+        return
+        self.RUC.run()
+        if self.RUC.hit_break_to_use_curvatures:
+            self.RUC.use_curvatures = True
+            self.RUC.run(setup=False)
+
+        #except AssertionError as err:
+        #    print("Rank %d, Hit assertion error during refinement: %s" % (comm.rank, err))
+        #    pass
 
 
 B = FatData()
@@ -476,4 +542,5 @@ B.fnames = fnames
 B.load()
 comm.Barrier()
 B.tally_statistics()
+B.refine()
 
