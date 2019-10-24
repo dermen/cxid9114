@@ -18,6 +18,7 @@ from simtbx.diffBragg.refiners.global_refiner import FatRefiner
 
 # import functions on rank 0 only
 if rank == 0:
+    print("Rank0 imports")
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
@@ -25,12 +26,14 @@ if rank == 0:
     parser.add_argument("--logdir", type=str, default='.', help="where to write log files (one per rank)")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--residual", action='store_true')
-    parser.add_argument("--Nmax", type=int, default=-1, help='Max number of images to process per rank')
+    parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
+    parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--curvatures", action='store_true')
     parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
+    parser.add_argument("--plotstats", action="store_true")
     args = parser.parse_args()
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
@@ -95,6 +98,8 @@ else:
 
 
 if has_mpi:
+    if rank==0:
+        print("Broadcasting imports")
     #FatRefiner = comm.bcast(FatRefiner, root=0)
     np_indices = comm.bcast(np_indices, root=0)
     glob = comm.bcast(glob, root=0)
@@ -133,7 +138,7 @@ class FatData:
         self.gain = 28  # gain of panels, can be refined, can be panel dependent
         self.flux_min = 1e2  # minimum number of photons to simulate (assume flux is N-photons, e.g. 1 second exposure)
         self.n_ucell_param = 2  # tetragonal cell
-        self.Nload = None  #
+        self.Nload = args.nload  #
         self.all_pix = 0
         self.time_load_start = 0
         self.fnames = []  # the filenames containing the datas
@@ -450,6 +455,7 @@ class FatData:
         n_ncell_param = 1
         n_scale_param = 1
         n_param_per_image = n_rot_param + self.n_ucell_param + n_ncell_param + n_scale_param
+        self.n_param_per_image = n_param_per_image
         total_per_image_unknowns = n_param_per_image * n_images
         self.n_local_unknowns = total_per_image_unknowns
         mem = self._usage()
@@ -484,11 +490,12 @@ class FatData:
             unknowns = None
 
         self.unknowns = comm.bcast(unknowns, root=0)
+        self.n_global_unknowns = self.unknowns + 2  # gain and detdist (originZ)
         self.starts_per_rank = comm.bcast(starts_per_rank, root=0)
 
     def refine(self):
         self.RUC = FatRefiner(
-            n_global_params=self.unknowns,
+            n_global_params=self.n_global_unknowns,
             n_local_params=self.n_local_unknowns,
             local_idx_start=self.starts_per_rank[comm.rank],
             shot_ucell_managers=self.all_ucell_mans,
@@ -502,6 +509,7 @@ class FatData:
 
         self.RUC.plot_images = args.plot
         self.RUC.plot_residuals = args.residual
+        self.RUC.plot_statistics = args.plotstats
         self.RUC.setup_plots()
         self.RUC.S = self.SIM
         self.RUC.has_pre_cached_roi_data = True
@@ -509,13 +517,13 @@ class FatData:
         self.RUC.trad_conv = True
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
-        self.RUC.refine_Umatrix = True
+        self.RUC.refine_Umatrix = False #True
         self.RUC.refine_Bmatrix = True
         self.RUC.refine_ncells = True
         self.RUC.use_curvatures = False  # args.curvatures
         self.RUC.calc_curvatures = True  # args.curvatures
         self.RUC.refine_crystal_scale = True
-        self.RUC.refine_gain_fac = True
+        self.RUC.refine_gain_fac = False #True
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 1e-4  # NOTE this is for single panel model
         self.RUC.max_calls = 300
@@ -523,9 +531,6 @@ class FatData:
         if args.verbose:
             if rank == 0:  # only show refinement stats for rank 0
                 self.RUC.verbose = True
-        self.RUC._setup()
-        self.RUC.compute_functional_and_gradients()
-        return
         self.RUC.run()
         if self.RUC.hit_break_to_use_curvatures:
             self.RUC.use_curvatures = True
