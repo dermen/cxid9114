@@ -6,11 +6,15 @@ parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed",type=int, dest='seed', default=None, help='random seed for orientation' )
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
+parser.add_argument("--datasf", action="store_true", help="whether to use data structure factors (NO ANOM)")
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true', help="seed the random number generator with worker Id")
 parser.add_argument("--masterscale", type=float, default=None)
 parser.add_argument("--readoutnoise", action="store_true")
 parser.add_argument("--add-bg", dest="add_bg",action='store_true',help="add background" )
 parser.add_argument("--add-noise", dest="add_noise",action='store_true',help="add noise" )
+parser.add_argument("--masterscalejitter", type=float,default=0, help="sigma of the master scale")
+parser.add_argument("--Ncellsjitter", type=float,default=0, help="sigma of the Ncells")
+parser.add_argument("--ucelljitter", type=float,default=0, help="sigma of the trtragonal unit cell constants a and c")
 parser.add_argument("--profile", dest="profile", type=str, default=None,
     choices=["gauss", "round", "square", "tophat"],help="shape of spots determined with this")
 parser.add_argument("--cspad", action="store_true")
@@ -28,7 +32,7 @@ parser.add_argument("--optimize-oversample", action='store_true')
 parser.add_argument("--show-params", action='store_true')
 parser.add_argument("--kernelspergpu", default=1, type=int, help="how many processes  accessing each gpu")
 parser.add_argument("--oversample", type=int, default=0)
-parser.add_argument("--Ncells", type=int, default=15)
+parser.add_argument("--Ncells", type=float, default=15)
 parser.add_argument("--xtal_size_mm", type=float, default=None)
 parser.add_argument("--mos_spread_deg", type=float, default="0.01")
 parser.add_argument("--mos_doms", type=int, default=100)
@@ -105,20 +109,18 @@ def main(rank):
     data_fluxes_all = h5py.File(spectra_file, "r")["hist_spec"][()] / exposure_s
     ave_flux_across_exp = np.mean(data_fluxes_all,axis=0).sum()
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
+    if args.datasf:
+        data_sf2 = struct_fact_special.load_4bs7_energy_no_anom()
+        data_sf2 = [data_sf2]*len(data_energies)  # + [None]*(len(data_energies)-1)
+        data_sf = data_sf2
     
     beamsize_mm = np.sqrt(np.pi*(beam_diam_mm/2)**2)
-    Ncells_abc = (args.Ncells, args.Ncells, args.Ncells)
     
     # TODO: verify this works for all variants of parallelization (multi 8-GPU nodes, multi kernels per GPU etc)
     data_fluxes_worker = np.array_split(data_fluxes_all, ngpu_per_node*kernels_per_gpu*num_nodes )[worker_Id]
 
     a,b,c,_,_,_ = data_sf[0].unit_cell().parameters()
     hall = data_sf[0].space_group_info().type().hall_symbol()
-    cryst_descr = {'__id__': 'crystal',  # its al,be,ga = 90,90,90
-                  'real_space_a': (a, 0, 0),
-                  'real_space_b': (0, b, 0),
-                  'real_space_c': (0, 0, c),
-                  'space_group_hall_symbol': hall}
     
     # Each rank (worker)  gets its own output directory
     odir = args.odir
@@ -126,7 +128,6 @@ def main(rank):
     if not os.path.exists(odirj):
         os.makedirs(odirj)
 
-    crystal = CrystalFactory.from_dict(cryst_descr)
     print("Rank %d Begin" % worker_Id)
     for i_data in range(args.num_trials):
         h5name = "%s_rank%d_data%d.h5" % (ofile, worker_Id, i_data)
@@ -152,8 +153,16 @@ def main(rank):
 
         data_fluxes = data_fluxes_worker[i_data]
 
+   
+        a = np.random.normal(a, args.ucelljitter)
+        c = np.random.normal(c, args.ucelljitter) 
+        cryst_descr = {'__id__': 'crystal',  # its al,be,ga = 90,90,90
+                      'real_space_a': (a, 0, 0),
+                      'real_space_b': (0, a, 0),
+                      'real_space_c': (0, 0, c),
+                      'space_group_hall_symbol': hall}
+        crystal = CrystalFactory.from_dict(cryst_descr)
         # generate a random scale factor within two orders of magnitude to apply to the image data.. 
-
         # rotate the crystal using a known rotation
         #crystal = CrystalFactory.from_dict(cryst_descr)
 
@@ -169,6 +178,8 @@ def main(rank):
         #    min_mos_spread=0.02, 
         #    max_mos_spread=0.08)
         #Ctruth = params_lst[0]['crystal']
+        Ncells = int(np.random.normal(args.Ncells, args.Ncellsjitter))
+        Ncells_abc = (Ncells, Ncells, Ncells)
         
         # the following will override some parameters
         # to aid simulation of a background image using same pipeline
@@ -187,6 +198,11 @@ def main(rank):
             xtal_size_mm = np.random.normal(xtal_size_mm, args.xtal_size_jitter)
 
         sim_args = [crystal, DET, BEAM, data_sf, data_energies, data_fluxes]
+        masterscale = args.masterscale
+        if masterscale is not None:
+            masterscale = np.random.normal( masterscale, args.masterscalejitter)
+        if masterscale < 0.1: # FIXME: make me more smart
+            master_scale = 0.1
         sim_kwargs = {'pids':None, 
                     'profile':args.profile, 
                     'cuda':cuda,
@@ -200,7 +216,7 @@ def main(rank):
                     'only_water':only_water, 
                     'device_Id':device_Id, 
                     'div_tup':div_tup, 
-                    'master_scale': args.masterscale,
+                    'master_scale': masterscale,
                     'gimmie_Patt':True, 
                     'adc_offset':adc_offset, 
                     'show_params':args.show_params,
