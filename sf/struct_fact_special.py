@@ -176,6 +176,41 @@ def load_sfall(fname):
 
     return mil_ar, energies
 
+def load_4bs7_sf():
+    from iotbx.reflection_file_reader import any_reflection_file
+    import os
+    from cctbx.array_family import flex
+    from cctbx import miller
+    sf_path = os.path.dirname(__file__)
+    sf_file = os.path.join(sf_path, "4bs7-sf.cif")
+
+    f = any_reflection_file(file_name=sf_file)
+    reader = f.file_content()
+    if reader is None:
+        raise ValueError("Be sure to install git lfs and pull in the actual file with 4bs7-sf.cif")
+    Fhkl = reader.build_miller_arrays()["r4bs7sf"]['_refln.F_meas_au_1']
+    Fanom = Fhkl.generate_bijvoet_mates()
+    Fdiff = reader.build_miller_arrays()['r4bs7sf']['_refln.pdbx_anom_difference_1']
+    
+    diff =  {h:[val,sig] for h,val,sig in zip(Fdiff.indices(), Fdiff.data(), Fdiff.sigmas())}
+    vals_anom = {h:[val,sig] for h,val,sig in zip(Fanom.indices(), Fanom.data(), Fanom.sigmas())}
+    for H in diff:
+	H_neg = -H[0], -H[1], -H[2]
+	# compute Fhkl_minus
+        vals_anom[H_neg][0] = vals_anom[H_neg][0] - diff[H][0]
+        
+        # propagate the error
+	vals_anom[H_neg][1] = np.sqrt(vals_anom[H_neg][1]**2 + diff[H][1]**2)
+    hout = tuple(vals_anom.keys())
+    
+    mil_idx = flex.miller_index(hout)
+    Symm = Fhkl.crystal_symmetry()
+    mil_set = miller.set(crystal_symmetry=Symm, indices=mil_idx, anomalous_flag=True)
+    Fdata = flex.double([vals_anom[h][0] for h in hout])
+    Fsigmas = flex.double([vals_anom[h][1] for h in hout])
+    Fhkl_anom = miller.array( mil_set, data=Fdata, sigmas=Fsigmas).set_observation_type_xray_amplitude()
+    
+    return Fhkl_anom
 
 if __name__=="__main__":
     main()

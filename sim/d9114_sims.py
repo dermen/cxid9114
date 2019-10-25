@@ -110,9 +110,9 @@ def main(rank):
     ave_flux_across_exp = np.mean(data_fluxes_all,axis=0).sum()
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
     if args.datasf:
-        data_sf2 = struct_fact_special.load_4bs7_energy_no_anom()
-        data_sf2 = [data_sf2]*len(data_energies)  # + [None]*(len(data_energies)-1)
-        data_sf = data_sf2
+        print("Loading 4bs7 structure factors!")
+        data_sf = struct_fact_special.load_4bs7_sf()
+        data_sf = [data_sf] + [None]*(len(data_energies)-1)
     
     beamsize_mm = np.sqrt(np.pi*(beam_diam_mm/2)**2)
     
@@ -153,7 +153,6 @@ def main(rank):
 
         data_fluxes = data_fluxes_worker[i_data]
 
-   
         a = np.random.normal(a, args.ucelljitter)
         c = np.random.normal(c, args.ucelljitter) 
         cryst_descr = {'__id__': 'crystal',  # its al,be,ga = 90,90,90
@@ -220,7 +219,8 @@ def main(rank):
                     'gimmie_Patt':True, 
                     'adc_offset':adc_offset, 
                     'show_params':args.show_params,
-                    'crystal_size_mm':xtal_size_mm}
+                    'crystal_size_mm':xtal_size_mm,
+                    'one_sf_array': data_sf[0] is not None and data_sf[1] is None}
 
         print ("SIULATING DATA IMAGE")
         if args.optimize_oversample:
