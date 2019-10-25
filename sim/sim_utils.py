@@ -299,7 +299,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                add_water=False, boost=1, device_Id=0,
                beamsize_mm=0.001, exposure_s=None, accumulate=False, only_water=False, 
                add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None,
-               amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None):
+               amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None,
+               one_sf_array=False):
 
     Npan = len(detector)
     Nchan = len(energies)
@@ -349,13 +350,21 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
         #PattF.adjust_divergence(div_tup)
          
         en_count = 0 
+        already_primed = False
         for i_en in range(Nchan):
-            if fluxes[i_en] == 0:
+            if fluxes[i_en]==0:
                 continue
-            
+            if one_sf_array:
+                if not already_primed:
+                    FCALC=fcalcs[0]
+                    already_primed=True
+                else:
+                    FCALC=None
+            else:
+                FCALC=fcalcs[i_en]
             PattF.primer(crystal=crystal,
                          energy=energies[i_en],
-                         F=fcalcs[i_en],
+                         F=FCALC,
                          flux=fluxes[i_en])
             
             if en_count==0 and ii==0 and show_params:
