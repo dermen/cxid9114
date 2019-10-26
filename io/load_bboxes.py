@@ -72,6 +72,11 @@ if rank == 0:
     # grab the structure factors at the edge energy (ENERGY_LOW=8944 eV)
     edge_idx = np.abs(data_energies-ENERGY_LOW).argmin()
     Fhkl_guess = data_sf[edge_idx]
+
+    if args.sad:
+        sad_range = range(edge_idx-10, edge_idx+10)
+        data_energies = data_energies[sad_range]
+
     wavelens = ENERGY_CONV / data_energies
 
     from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
@@ -107,7 +112,8 @@ if has_mpi:
     args = comm.bcast(args, root=0)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
     Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
-    if args.startwithtruth and args.sad:
+    #if args.startwithtruth and args.sad:
+    if args.sad:
         from cxid9114.sf.struct_fact_special import load_4bs7_sf
         Fhkl_guess = load_4bs7_sf()
     wavelens = comm.bcast(wavelens, root=0)
@@ -283,6 +289,8 @@ class BigData:
             es = data["exposure_s"][()]
             fluxes *= es  # multiply by the exposure time
             spectrum = zip(wavelens, fluxes)
+            from IPython import embed
+            # embed()
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
 
@@ -296,6 +304,7 @@ class BigData:
             # create a nanoBragg crystal
             nbcryst = nanoBragg_crystal()
             nbcryst.dxtbx_crystal = C
+            C.set_U(C_tru.get_U())
             if args.startwithtruth:
                 nbcryst.dxtbx_crystal = C_tru
             nbcryst.thick_mm = 0.1
@@ -320,9 +329,12 @@ class BigData:
 
             spot_scale = 12
             if args.sad:
-                spot_scale = .3
+                spot_scale = 1
             SIM.instantiate_diffBragg(default_F=0)
             SIM.D.spot_scale = spot_scale
+
+            from IPython import embed
+            embed()
 
             img_in_photons = img / self.gain
 
@@ -343,7 +355,7 @@ class BigData:
                 RUC.trad_conv = True
                 RUC.refine_detdist = False
                 RUC.refine_background_planes = False
-                RUC.refine_Umatrix = False
+                RUC.refine_Umatrix = False #True
                 RUC.refine_Bmatrix = True
                 RUC.refine_ncells = True
                 RUC.use_curvatures = False  # args.curvatures
@@ -366,6 +378,8 @@ class BigData:
                 continue
 
             angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
+            if args.startwithtruth:
+                C = Crystal(a_tru, b_tru, c_tru, "P43212")
             C.rotate_around_origin(ax, angle)
             C.set_B(RUC.get_refined_Bmatrix())
             a_ref, _, c_ref, _, _, _ = C.get_unit_cell().parameters()
