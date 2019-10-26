@@ -5,6 +5,7 @@ parser = argparse.ArgumentParser("make dadat")
 parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed",type=int, dest='seed', default=None, help='random seed for orientation' )
+parser.add_argument("--sad", action="store_true")
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
 parser.add_argument("--datasf", action="store_true", help="whether to use data structure factors (NO ANOM)")
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true', help="seed the random number generator with worker Id")
@@ -113,7 +114,14 @@ def main(rank):
         print("Loading 4bs7 structure factors!")
         data_sf = struct_fact_special.load_4bs7_sf()
         data_sf = [data_sf] + [None]*(len(data_energies)-1)
-    
+        
+    sad_idx = np.argmin(np.abs(data_energies-8944))
+    sad_range = range(sad_idx-10, sad_idx+10)
+    n_sad = len(sad_range)
+    if args.sad:
+        data_sf = [data_sf[0]] + [None]*(n_sad-1)
+        data_energies = np.array([data_energies[i] for i in sad_range])
+
     beamsize_mm = np.sqrt(np.pi*(beam_diam_mm/2)**2)
     
     # TODO: verify this works for all variants of parallelization (multi 8-GPU nodes, multi kernels per GPU etc)
@@ -153,6 +161,11 @@ def main(rank):
 
         data_fluxes = data_fluxes_worker[i_data]
 
+        if args.sad:
+            flux_sum = data_fluxes.sum()
+            data_fluxes = data_fluxes[sad_range]
+            data_fluxes  = data_fluxes/data_fluxes.sum() * flux_sum
+
         a = np.random.normal(a, args.ucelljitter)
         c = np.random.normal(c, args.ucelljitter) 
         cryst_descr = {'__id__': 'crystal',  # its al,be,ga = 90,90,90
@@ -184,7 +197,7 @@ def main(rank):
         # to aid simulation of a background image using same pipeline
         if make_background:
             print("MAKING BACKGROUND : just at two colors")
-            data_fluxes = [ ave_flux_across_exp*.5, ave_flux_across_exp*.5]
+            data_fluxes = [ave_flux_across_exp*.5, ave_flux_across_exp*.5]
             data_energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]  # should be 8944 and 9034
             data_sf = [1, 1]  # dont care about structure factors when simulating background water scatter
             Ncells_abc = 10, 10, 10

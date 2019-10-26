@@ -1,6 +1,9 @@
 
 from argparse import ArgumentParser
 from copy import deepcopy
+from cxid9114.sf.struct_fact_special import load_4bs7_sf
+from cctbx import miller
+from cctbx import sgtbx
 
 parser = ArgumentParser("Make prediction boxes")
 
@@ -9,16 +12,21 @@ parser.add_argument("--nrank", type=int, default=1)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
 parser.add_argument("--sad",action="store_true")
 parser.add_argument("-o",help='output directoty',  type=str, default='.')
+parser.add_argument("--plot", action="store_true")
+parser.add_argument("--usegt", action="store_true")
 parser.add_argument("--show_params", action='store_true')
 args = parser.parse_args()
 
 import numpy as np
+if args.plot:
+    import pylab as plt
 import pandas
 from dxtbx.model.experiment_list import ExperimentListFactory
 from mpi4py import MPI
 import h5py
 
 from cxid9114.sim import sim_utils
+from cxid9114.geom.multi_panel import CSPAD
 
 from cxid9114 import parameters, utils
 from cxid9114.prediction import prediction_utils
@@ -33,20 +41,25 @@ size = MPI.COMM_WORLD.size
 rank = MPI.COMM_WORLD.rank
 
 # Load in the reflection tables and experiment lists
-El_fnames, refl_fnames = [], []
+
+El_fnames, refl_fnames = [],[]
 for El_f in glob.glob(args.glob):
-    refl_f = El_f.replace("El", "refl").replace(".json", ".pkl")
+    name_base = El_f.split("_refined.expt")[0]
+    refl_f = "%s_strong.refl" % name_base
     if os.path.exists(refl_f):
         El_fnames.append(El_f)
         refl_fnames.append(refl_f)
 
 GAIN = 28
 
-if not os.path.exists(args.o):
+
+if not os.path.exists(args.o) and rank == 0:
     os.makedirs(args.o)
 
-if rank == 0:
-    print El_fnames
+MPI.COMM_WORLD.Barrier()
+
+assert El_fnames
+
 all_paths = []
 all_Amats = []
 odir = args.o
@@ -58,10 +71,10 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     if i_shot % size != rank:
         continue
     if rank == 0:
-        print("Rank 0: Doing shot %d / %d" % (i_shot+1, len( El_fnames)))
+        print("Rank 0: Doing shot %d / %d" % (i_shot + 1, len(El_fnames)))
 
     El = ExperimentListFactory.from_json_file(El_json, check_format=True)
-    #El = ExperimentListFactory.from_json_file(El_json, check_format=False)
+    # El = ExperimentListFactory.from_json_file(El_json, check_format=False)
 
     iset = El.imagesets()[0]
     fpath = iset.get_path(0)
@@ -71,6 +84,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     h5 = h5py.File(fpath.replace(".npz", ""), 'r')
     mos_spread = h5["mos_spread"][()]
     Ncells_abc = tuple(h5["Ncells_abc"][()])
+    #Ncells_abc = 7, 7, 7
     mos_doms = h5["mos_doms"][()]
     profile = h5["profile"][()]
     beamsize = h5["beamsize_mm"][()]
@@ -89,19 +103,24 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
 
     if args.sad:
         FF.pop()
-        FLUX.pop()
+        FLUX = [FLUX[0]*2]
         energies.pop()
 
     BEAM = El.beams()[0]
     DET = El.detectors()[0]
+
     crystal = El.crystals()[0]
+    if args.usegt:
+        crystal.set_A(h5["crystalA"][()])
+        DET = deepcopy(CSPAD)
     beams = []
     device_Id = rank % n_gpu
     simsAB = sim_utils.sim_colors(
         crystal, DET, BEAM, FF,
         energies,
         FLUX, pids=None, profile=profile, cuda=True, oversample=1,
-        Ncells_abc=Ncells_abc, mos_dom=mos_doms, mos_spread=mos_spread,
+        Ncells_abc=Ncells_abc, mos_dom=50, mos_spread=0.02,
+        master_scale=1,
         exposure_s=exposure_s, beamsize_mm=beamsize, device_Id=device_Id,
         show_params=args.show_params, accumulate=False, crystal_size_mm=xtal_size)
 
@@ -121,11 +140,12 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         continue
 
     # this gets the integration shoeboxes, not to be confused with strong spot bound boxes
-    Hi, bboxes, bbox_panel_ids, Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
+    Hi, bboxes, bbox_panel_ids, patches,Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
         refls_at_colors,
         DET, beams,
         crystal, delta_q=0.0475, ret_Pvals=True,
-        data=img_data, refls_data=refls_data, gain=GAIN)  # ret_patches=True, fc='none', ec='w')
+        data=img_data, ret_patches=True, refls_data=refls_data, gain=GAIN,
+        fc='none', ec='r')  # ret_patches=True, fc='none', ec='w')
 
     # TODO per panel strong spot mask
     # dxtbx detector size is (fast scan x slow scan)
@@ -176,17 +196,13 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
     #writer.create_dataset("bg_pixel_mask/shot%d" % n_processed, data=is_bg_pixel, dtype=bool, compression="lzf")
 
-    from cctbx import sgtbx
     sg96 = sgtbx.space_group(" P 4nw 2abw")
 
     # ground truth structure factors ?
-    from cxid9114.sf.struct_fact_special import load_4bs7_sf
     FA = load_4bs7_sf()
     HA = tuple([hkl for hkl in FA.indices()])
     HA_val_map = {h: data for h, data in zip(FA.indices(), FA.data())}
     Hmaps = [HA_val_map]
-
-    from cctbx import miller
 
     def get_val_at_hkl(hkl, val_map):
         poss_equivs = [i.h() for i in
@@ -201,9 +217,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         else:
             return (None, None, None), -1
 
-
-    K = FF[0] ** 2 * FLUX[0]
-    LA = spectrum[:75].sum()
+    K = FF[0] ** 2 * FLUX[0] * exposure_s
+    LA = FLUX[0] * exposure_s
     L_at_color = [LA]
 
     Nh = len(Hi)
@@ -258,9 +273,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     pklname = fpath.replace(".h5.npz", ".pdpkl")
     df.to_pickle(pklname)
 
-    if args.plot:
+    if args.plot and rank == 0:
         print("PLOT")
-        import pylab as plt
 
         plt.plot(df.lhs, df.rhs, '.')
         plt.show()

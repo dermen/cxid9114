@@ -156,7 +156,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     unique_indexed_Hi = set(all_indexed_Hi)
 
     all_x, all_y, all_H = [], [], []
-    patches = []
+    patches = {}
     bboxes = []
     panel_ids = []
     all_spot_Pterms = []  # NOTE this is for the preliminary merging code
@@ -219,12 +219,15 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
                               width=delrad,
                               height=delrad,
                               **kwargs)
-            patches.append(R)
+            try:
+                patches[PID].append(R)
+            except KeyError:
+                patches[PID] = [R]
 
         if ret_Pvals:
 
             sub_data = data[PID, j1:j2, i1:i2]
-            sub_mask = ((~allspotmask) * bad_pixel_mask)[j1:j2, i1:i2]
+            sub_mask = ((~allspotmask[PID]) * bad_pixel_mask[PID])[j1:j2, i1:i2]
 
             tilt, bgmask, coeff = integrate_utils.tilting_plane(
                 sub_data,
@@ -235,7 +238,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
 
             int_mask = np.zeros(data_to_be_integrated.shape, bool)
             for i_color in spot_Pterms_color_idx:
-                int_mask = np.logical_or(int_mask, color_integration_masks[i_color][j1:j2, i1:i2])
+                int_mask = np.logical_or(int_mask, color_integration_masks[i_color][PID][j1:j2, i1:i2])
 
             Yobs = (data_to_be_integrated*int_mask).sum() / gain
             integrated_Hi.append(Yobs)
@@ -243,9 +246,10 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     unique_indexed_Hi = set(all_indexed_Hi)
     return_lst = [list(unique_indexed_Hi), bboxes, panel_ids]
     if ret_patches:
-        patch_coll = mpl.collections.PatchCollection(patches,
-                          match_original=True)
-        return_lst.append(patch_coll)
+        #patch_coll = mpl.collections.PatchCollection(patches,
+        #                  match_original=True)
+        #return_lst.append(patch_coll)
+        return_lst.append(patches)
     if ret_Pvals:
         return_lst += [all_spot_Pterms, all_spot_Pterms_color_idx, integrated_Hi]
     return return_lst

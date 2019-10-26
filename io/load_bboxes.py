@@ -27,6 +27,8 @@ if rank == 0:
     parser.add_argument("--Nmax", type=int, default=-1, help='Max number of images to process per rank')
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--curvatures", action='store_true')
+    parser.add_argument("--sad", action='store_true')
+    #parser.add_argument("--truthdet", action="store_true")
     parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--testmode", action="store_true", help="debug flag for doing a test run")
@@ -54,7 +56,10 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
     #from simtbx.diffBragg.refiners import RefineAll as RefineAllMultiPanel
-    from cxid9114.geom.multi_panel import CSPAD
+    if args.startwithtruth:
+        from cxid9114.geom.multi_panel import CSPAD
+    else:
+        from cxid9114.geom.multi_panel import CSPAD_refined as CSPAD
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
@@ -102,6 +107,9 @@ if has_mpi:
     args = comm.bcast(args, root=0)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel, root=0)
     Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
+    if args.startwithtruth and args.sad:
+        from cxid9114.sf.struct_fact_special import load_4bs7_sf
+        Fhkl_guess = load_4bs7_sf()
     wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
     sqr = comm.bcast(sqr, root=0)
@@ -290,7 +298,6 @@ class BigData:
             nbcryst.dxtbx_crystal = C
             if args.startwithtruth:
                 nbcryst.dxtbx_crystal = C_tru
-
             nbcryst.thick_mm = 0.1
             nbcryst.Ncells_abc = 30, 30, 30
             nbcryst.miller_array = Fhkl_guess.as_amplitude_array()
@@ -312,10 +319,13 @@ class BigData:
             SIM.panel_id = 0  # default
 
             spot_scale = 12
+            if args.sad:
+                spot_scale = .3
             SIM.instantiate_diffBragg(default_F=0)
             SIM.D.spot_scale = spot_scale
 
             img_in_photons = img / self.gain
+
             print("Rank %d, Starting refinement!" % rank)
             try:
                 RUC = RefineAllMultiPanel(
@@ -328,11 +338,12 @@ class BigData:
                     ucell_manager=ucell_man)
 
                 RUC.panel_ids = panel_ids
+                RUC.multi_panel = True
                 RUC.split_evaluation = args.split
                 RUC.trad_conv = True
                 RUC.refine_detdist = False
                 RUC.refine_background_planes = False
-                RUC.refine_Umatrix = True
+                RUC.refine_Umatrix = False
                 RUC.refine_Bmatrix = True
                 RUC.refine_ncells = True
                 RUC.use_curvatures = False  # args.curvatures
@@ -393,6 +404,7 @@ class BigData:
 
 B = BigData()
 fnames = glob(args.glob)
+assert(fnames)
 B.fnames = fnames
 B.load()
 

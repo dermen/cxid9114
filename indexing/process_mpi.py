@@ -7,6 +7,8 @@ parser = ArgumentParser("Make prediction boxes")
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--nrank", type=int, default=1)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
+parser.add_argument("--reflglob", type=str, default=None)
+parser.add_argument("--sad", action="store_true")
 parser.add_argument("-o",help='output directoty',  type=str, default='.')
 parser.add_argument("--show_params", action='store_true')
 args = parser.parse_args()
@@ -32,12 +34,16 @@ size = MPI.COMM_WORLD.size
 rank = MPI.COMM_WORLD.rank
 
 # Load in the reflection tables and experiment lists
-El_fnames, refl_fnames = [], []
-for El_f in glob.glob(args.glob):
-    refl_f = El_f.replace("El", "refl").replace(".json", ".pkl")
-    if os.path.exists(refl_f):
-        El_fnames.append(El_f)
-        refl_fnames.append(refl_f)
+if args.reflglob is None:
+    El_fnames, refl_fnames = [], []
+    for El_f in glob.glob(args.glob):
+        refl_f = El_f.replace("El", "refl").replace(".json", ".pkl")
+        if os.path.exists(refl_f):
+            El_fnames.append(El_f)
+            refl_fnames.append(refl_f)
+else:
+    El_fnames = glob.glob(args.glob)
+    refl_fnames = glob.glob(args.reflglob)
 
 GAIN = 28
 
@@ -82,6 +88,10 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     FF = [1e3, None]  # NOTE: not sure what to do here, we dont know the structure factor
     FLUX = [total_flux * .5, total_flux*.5]
     energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]
+    if args.sad:
+        FF.pop()
+        FLUX.pop()
+        energies.pop()
 
     BEAM = El.beams()[0]
     DET = El.detectors()[0]
