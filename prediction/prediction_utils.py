@@ -3,6 +3,16 @@
 import numpy as np
 from dials.array_family import flex
 from scitbx.matrix import sqr
+from cxid9114.integrate import integrate_utils
+
+
+def refls_by_panelname(refls):
+    Nrefl = len(refls)
+    panel_names = np.array([refls["panel"][i] for i in range( Nrefl)])
+    uniq_names = np.unique(panel_names)
+    refls_by_panel = {name: refls.select(flex.bool(panel_names == name))
+                      for name in uniq_names}
+    return refls_by_panel
 
 
 def refls_to_q(refls, detector, beam, update_table=False):
@@ -79,10 +89,10 @@ def xyz_from_refl(refl, key="xyzobs.px.value"):
     return x,y,z
 
 
-
 def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
                     twopi_conv=True, delta_q=0.015,
-                    ret_patches=False, **kwargs):
+                    ret_patches=False, ret_Pvals=False, data=None, refls_data=None,
+                    bad_pixel_mask=None, gain=1, **kwargs):
     """
     :param refls_at_colors: List of reflection tables, one for each color in the experiment
     :param detector: dxtbx detector model
@@ -97,6 +107,17 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     if ret_patches:
         import matplotlib as mpl
         import pylab as plt
+    if ret_Pvals:
+        assert data is not None
+        assert refls_data is not None
+        color_integration_masks = {}
+        for i_color, refls in enumerate(refls_at_colors):
+            color_integration_masks[i_color] = \
+                strong_spot_mask(refls, detector)
+        allspotmask = strong_spot_mask(refls_data, detector)
+        if bad_pixel_mask is None:
+            bad_pixel_mask = np.ones_like(allspotmask, bool)
+        integrated_Hi = []
 
     color_data = {}
     color_data["Q"] = []  # momentum transfer vector
@@ -106,6 +127,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     color_data["y"] = []  # slow scane coordinate in panel
     color_data["Qmag"] = []  # momentum transfer magnitude
     color_data["panel"] = []  # panel id in detector model
+    color_data["Pterms"] = []  # summed Bragg spot intensity
     # assume these are the same for all panels in the detector (it need only be approximate for te purpose here)
     detdist = detector[0].get_distance()
     pixsize = detector[0].get_pixel_size()[0]
@@ -116,6 +138,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
             refls, detector, beam, crystal,  returnQ=True)
 
         color_data["panel"].append(list(refls['panel']))
+        color_data["Pterms"].append(list(refls["intensity.sum.value"]))
         color_data["Q"].append(list(Q))
         color_data["H"].append(list(H))
         color_data["Hi"].append(list(map(tuple, Hi)))
@@ -136,6 +159,8 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     patches = []
     bboxes = []
     panel_ids = []
+    all_spot_Pterms = []  # NOTE this is for the preliminary merging code
+    all_spot_Pterms_color_idx = []
     for H in unique_indexed_Hi:
         x_com = 0
         y_com = 0
@@ -143,6 +168,8 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         n_counts = 0
         seen_pids = []  # how many different panel ids for this HKL - should be same pid across all colors
         in_multiple_panels = False
+        spot_Pterms = []
+        spot_Pterms_color_idx = []
         for i_color in range(len(beams_of_colors)):
             in_color = H in color_data["Hi"][i_color]
             if not in_color:
@@ -159,14 +186,19 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
             y_com += color_data["y"][i_color][idx] - 0.5
             Qmag += color_data["Qmag"][i_color][idx]
             n_counts += 1
+            spot_Pterms.append(color_data["Pterms"][i_color][idx])
+            spot_Pterms_color_idx.append(i_color)
 
         if in_multiple_panels:
             continue
         assert len(seen_pids) == 1  # sanity check, will remove
-        panel_ids.append(seen_pids[0])
+        PID = seen_pids[0]
+        panel_ids.append(PID)
         Qmag = Qmag / n_counts
         all_x.append(x_com / n_counts)
         all_y.append(y_com / n_counts)
+        all_spot_Pterms.append(spot_Pterms)
+        all_spot_Pterms_color_idx.append(spot_Pterms_color_idx)
 
         x_com = x_com / n_counts
         y_com = y_com / n_counts
@@ -189,13 +221,55 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
                               **kwargs)
             patches.append(R)
 
+        if ret_Pvals:
+
+            sub_data = data[PID, j1:j2, i1:i2]
+            sub_mask = ((~allspotmask) * bad_pixel_mask)[j1:j2, i1:i2]
+
+            tilt, bgmask, coeff = integrate_utils.tilting_plane(
+                sub_data,
+                mask=sub_mask,
+                zscore=2)
+
+            data_to_be_integrated = sub_data - tilt
+
+            int_mask = np.zeros(data_to_be_integrated.shape, bool)
+            for i_color in spot_Pterms_color_idx:
+                int_mask = np.logical_or(int_mask, color_integration_masks[i_color][j1:j2, i1:i2])
+
+            Yobs = (data_to_be_integrated*int_mask).sum() / gain
+            integrated_Hi.append(Yobs)
+
     unique_indexed_Hi = set(all_indexed_Hi)
+    return_lst = [list(unique_indexed_Hi), bboxes, panel_ids]
     if ret_patches:
         patch_coll = mpl.collections.PatchCollection(patches,
                           match_original=True)
-        return list(unique_indexed_Hi), bboxes, panel_ids, patch_coll
-    else:
-        return list(unique_indexed_Hi), bboxes, panel_ids
+        return_lst.append(patch_coll)
+    if ret_Pvals:
+        return_lst += [all_spot_Pterms, all_spot_Pterms_color_idx, integrated_Hi]
+    return return_lst
+
+
+def strong_spot_mask(refl_tbl, detector):
+    """
+
+    :param refl_tbl:
+    :param detector:
+    :return:  strong spot mask same shape as detector (multi panel)
+    """
+    # dxtbx detector size is (fast scan x slow scan)
+    nfast, nslow = detector[0].get_image_size()
+    n_panels = len(detector)
+    is_strong_pixel = np.zeros((n_panels, nslow, nfast), bool)
+    panel_ids = refl_tbl["panel"]
+    # mask the strong spots so they dont go into tilt plane fits
+    for i_refl, (x1, x2, y1, y2, _, _) in enumerate(refl_tbl['bbox']):
+        i_panel = panel_ids[i_refl]
+        bb_ss = slice(y1, y2, 1)
+        bb_fs = slice(x1, x2, 1)
+        is_strong_pixel[i_panel, bb_ss, bb_fs] = True
+    return is_strong_pixel
 
 
 def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids=None, **kwargs):
