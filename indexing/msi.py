@@ -162,7 +162,10 @@ def msi(jid):
         DET = loader.get_detector()
         BEAM = loader.get_beam()
         El = ExperimentListFactory.from_imageset_and_crystal(iset, crystal=None)
-        
+        E = El[0]
+        from cxid9114.geom.multi_panel import CSPAD_refined, CSPAD
+        El[0].detector = CSPAD_refined
+
         if idx in weak_shots and skip_weak:
             print("Skipping weak shots %d" % idx)
             continue
