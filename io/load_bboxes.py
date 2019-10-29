@@ -32,6 +32,7 @@ if rank == 0:
     parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--testmode", action="store_true", help="debug flag for doing a test run")
+    parser.add_argument("--testmode2", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--split", action="store_true", help="split evaluation on a single rank")
     args = parser.parse_args()
@@ -199,7 +200,9 @@ class BigData:
         my_open_files = {fidx: h5py_File(self.fnames[fidx], "r") for fidx in my_unique_fids}
         Ntot = 0
         self.all_bbox_pixels = []
-        for img_num, (fname_idx, shot_idx) in  enumerate( my_shots):
+        for img_num, (fname_idx, shot_idx) in  enumerate(my_shots):
+            if img_num < 3:
+                continue
             if img_num == args.Nmax:
                 #print("Already processed maximum number images!")
                 continue
@@ -211,6 +214,10 @@ class BigData:
             if args.testmode:
                 import os
                 npz_path = os.path.basename(npz_path)
+            if args.testmode2:
+                import os
+                npz_path = npz_path.split("d9114_sims/")[1]
+                npz_path = os.path.join("/Users/dermen/", npz_path)
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
 
@@ -273,6 +280,8 @@ class BigData:
             # NOTE remove me
             if args.testmode:
                 h5_fname = os.path.basename(h5_fname)
+            if args.testmode2:
+                h5_fname = npz_path.split(".npz")[0]
             data = h5py_File(h5_fname, "r")
 
             tru = sqr(data["crystalA"][()]).inverse().elems
@@ -289,8 +298,6 @@ class BigData:
             es = data["exposure_s"][()]
             fluxes *= es  # multiply by the exposure time
             spectrum = zip(wavelens, fluxes)
-            from IPython import embed
-            # embed()
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
 
@@ -304,7 +311,6 @@ class BigData:
             # create a nanoBragg crystal
             nbcryst = nanoBragg_crystal()
             nbcryst.dxtbx_crystal = C
-            C.set_U(C_tru.get_U())
             if args.startwithtruth:
                 nbcryst.dxtbx_crystal = C_tru
             nbcryst.thick_mm = 0.1
@@ -330,16 +336,15 @@ class BigData:
             spot_scale = 12
             if args.sad:
                 spot_scale = 1
-            SIM.instantiate_diffBragg(default_F=0)
+            SIM.instantiate_diffBragg(default_F=0, oversample=0)
             SIM.D.spot_scale = spot_scale
 
-            from IPython import embed
-            embed()
-
             img_in_photons = img / self.gain
-
             print("Rank %d, Starting refinement!" % rank)
             try:
+                n_spot = 20
+                bboxes = array(bboxes)[:n_spot]
+                tilt_abc = array(tilt_abc)[:n_spot]
                 RUC = RefineAllMultiPanel(
                     spot_rois=bboxes,
                     abc_init=tilt_abc,
@@ -355,12 +360,13 @@ class BigData:
                 RUC.trad_conv = True
                 RUC.refine_detdist = False
                 RUC.refine_background_planes = False
-                RUC.refine_Umatrix = False #True
+                RUC.refine_Umatrix = True
                 RUC.refine_Bmatrix = True
                 RUC.refine_ncells = True
                 RUC.use_curvatures = False  # args.curvatures
                 RUC.calc_curvatures = True  #args.curvatures
                 RUC.refine_crystal_scale = True
+                RUC.use_curvatures_threshold = 3
                 RUC.refine_gain_fac = False
                 RUC.plot_stride = args.stride
                 RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
@@ -371,6 +377,7 @@ class BigData:
                         RUC.verbose = True
                 RUC.run()
                 if RUC.hit_break_to_use_curvatures:
+                    RUC.num_positive_curvatures = 0
                     RUC.use_curvatures = True
                     RUC.run(setup=False)
             except AssertionError as err:
@@ -391,6 +398,9 @@ class BigData:
             except Exception as err:
                 print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
 
+            A_ref = C.get_A()
+            ff = os.path.basename(npz_path)
+            np.save("crystals/%s_refined" % ff, A_ref)
             # free the memory from diffBragg instance
             RUC.S.D.free_all()
             del img  # not sure if needed here..
