@@ -33,6 +33,7 @@ if rank == 0:
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
+    parser.add_argument("--boopi", type=int, default=0)
     parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--perimage", action="store_true")
@@ -167,6 +168,7 @@ class FatData:
         self.all_nanoBragg_rois = {}
         self.SIM = None  # simulator; one per rank!
         self.all_roi_imgs = {}
+        self.all_fnames = {}
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
@@ -191,7 +193,7 @@ class FatData:
         self.SIM.crystal = nbcryst
         self.SIM.beam = nbbeam
         self.SIM.panel_id = 0  # default
-        self.SIM.instantiate_diffBragg(default_F=0, oversample=2)
+        self.SIM.instantiate_diffBragg(default_F=0, oversample=0)
         self.SIM.D.spot_scale = 12
 
     # @profile
@@ -229,12 +231,16 @@ class FatData:
             good_fnames = md["fnames"]
 
             shots_for_rank = []
+
+            #good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
             for fname in good_fnames[:size]:
                 shot_pos = all_basename.index(fname)
                 shots_for_rank.append([(0, shot_pos)])
+
+
             if args.boop:
                 shots_for_rank = [[]]
-                good_fnames = [good_fnames[3]]  #, good_fnames[0] ] + list(good_fnames[2:])
+                good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
                 for fname in good_fnames:
                     shot_pos = all_basename.index(fname)
                     shots_for_rank[0] += [(0, shot_pos)]
@@ -485,6 +491,14 @@ class FatData:
                   % (rank, Ntot, len(bboxes), n_bboxes_total,  img_num +1, len(my_shots), mem)
             self.all_pix += Ntot
 
+            #n = 30
+            #bboxes = bboxes[:n]
+            #tilt_abc = tilt_abc[:n]
+            #panel_ids = panel_ids[:n]
+            #nanoBragg_rois = nanoBragg_rois[:n]
+            #xrel = xrel[:n]
+            #yrel = yrel[:n]
+
             # TODO: accumulate per-shot information
             self.all_spot_roi[img_num] = bboxes
             self.all_abc_inits[img_num] = tilt_abc
@@ -497,6 +511,7 @@ class FatData:
             self.all_yrel[img_num] = yrel
             self.all_nanoBragg_rois[img_num] = nanoBragg_rois
             self.all_roi_imgs[img_num] = roi_img
+            self.all_fnames[img_num] = npz_path
 
         for h in my_open_files.values():
             h.close()
@@ -571,7 +586,7 @@ class FatData:
             shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
-            init_gain=1.6)
+            init_gain=1.2)
 
         self.RUC.plot_images = args.plot
         self.RUC.plot_residuals = args.residual
@@ -593,7 +608,7 @@ class FatData:
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-        self.RUC.max_calls = 300
+        self.RUC.max_calls = 3000
         self.RUC.verbose = False
 
         if args.verbose:
@@ -663,8 +678,8 @@ class FatData:
                 angular_offset_ref = compare_with_ground_truth(a_tru, b_tru, c_tru,
                                                                [self.RUC.CRYSTAL_MODELS[i_shot]],
                                                                symbol="P43212")[0]
-                print("Rank %d, file=%d, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
-                    rank, i_shot, angular_offset_ref, angular_offset_init, a_ref, a_init, c_ref, c_init))
+                print("Rank %d, file=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
+                    rank, self.all_fnames[i_shot], angular_offset_ref, angular_offset_init, a_ref, a_init, c_ref, c_init))
             except Exception as err:
                 print("Rank %d, file=%d, error %s" % (rank, i_shot, err))
 
