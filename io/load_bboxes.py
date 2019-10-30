@@ -214,6 +214,7 @@ class BigData:
             if args.testmode:
                 import os
                 npz_path = os.path.basename(npz_path)
+                npz_path ="cspad_rank0_data25.h5.npz"
             if args.testmode2:
                 import os
                 npz_path = npz_path.split("d9114_sims/")[1]
@@ -280,6 +281,7 @@ class BigData:
             # NOTE remove me
             if args.testmode:
                 h5_fname = os.path.basename(h5_fname)
+                h5_fname = "cspad_rank0_data25.h5"
             if args.testmode2:
                 h5_fname = npz_path.split(".npz")[0]
             data = h5py_File(h5_fname, "r")
