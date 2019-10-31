@@ -225,26 +225,26 @@ class FatData:
             shots_for_rank = array_split(shot_tuples, size)
 
             # NOTE: this is a hack for now
-            md = np_load("results_big_proc12.txt.npz")
-            h5f = h5py_File("/Users/dermen/cspadA/agg2/process_rank0.h5", "r")
-            import os
-            all_basename = [os.path.basename(ff).split(".npz")[0] for ff in h5f["h5_path"][()]]
-            good_fnames = md["fnames"]
+            #md = np_load("results_big_proc12.txt.npz")
+            #h5f = h5py_File("/Users/dermen/cspadA/agg2/process_rank0.h5", "r")
+            #import os
+            #all_basename = [os.path.basename(ff).split(".npz")[0] for ff in h5f["h5_path"][()]]
+            #good_fnames = md["fnames"]
 
-            shots_for_rank = []
+            #shots_for_rank = []
 
-            #good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
-            for fname in good_fnames[:size]:
-                shot_pos = all_basename.index(fname)
-                shots_for_rank.append([(0, shot_pos)])
+            ##good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
+            #for fname in good_fnames[:size]:
+            #    shot_pos = all_basename.index(fname)
+            #    shots_for_rank.append([(0, shot_pos)])
 
 
-            if args.boop:
-                shots_for_rank = [[]]
-                good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
-                for fname in good_fnames:
-                    shot_pos = all_basename.index(fname)
-                    shots_for_rank[0] += [(0, shot_pos)]
+            #if args.boop:
+            #    shots_for_rank = [[]]
+            #    good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
+            #    for fname in good_fnames:
+            #        shot_pos = all_basename.index(fname)
+            #        shots_for_rank[0] += [(0, shot_pos)]
             # NOTE end of hack
 
             # close the open h5s..
