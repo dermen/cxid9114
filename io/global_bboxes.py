@@ -38,6 +38,7 @@ if rank == 0:
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--perimage", action="store_true")
     parser.add_argument("--verbose", action='store_true')
+    parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--curvatures", action='store_true')
     parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("startwithopt", action="store_true")
@@ -573,6 +574,9 @@ class FatData:
         self.n_global_params = 2  # detdist and gain
 
     def refine(self):
+        init_gain = 1
+        if args.gainrefine:
+            init_gain = 1.2
         self.RUC = FatRefiner(
             n_total_params=self.n_total_unknowns,
             n_local_params=self.n_local_unknowns,
@@ -586,7 +590,7 @@ class FatData:
             shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
-            init_gain=1.2)
+            init_gain=init_gain)
 
         self.RUC.plot_images = args.plot
         self.RUC.plot_residuals = args.residual
@@ -603,13 +607,16 @@ class FatData:
         self.RUC.refine_Bmatrix = True
         self.RUC.refine_ncells = True
         self.RUC.refine_crystal_scale = True
-        self.RUC.refine_gain_fac = True
+        self.RUC.refine_gain_fac = args.gainrefine
         self.RUC.use_curvatures = False  # args.curvatures
         self.RUC.calc_curvatures = args.curvatures
+        self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
         self.RUC.max_calls = 3000
         self.RUC.verbose = False
+        self.RUC.use_rot_priors = True
+        self.RUC.use_ucell_priors = True
 
         if args.verbose:
             if rank == 0:  # only show refinement stats for rank 0
@@ -674,12 +681,13 @@ class FatData:
             self.RUC.CRYSTAL_MODELS[i_shot].set_B(B)
             a_ref, _, c_ref, _, _, _ = self.RUC.CRYSTAL_MODELS[i_shot].get_unit_cell().parameters()
             # compute missorientation with ground truth model
+            tot_negs = sum([(roi < 0).sum() for roi in self.RUC.ROI_IMGS[i_shot]])
             try:
                 angular_offset_ref = compare_with_ground_truth(a_tru, b_tru, c_tru,
                                                                [self.RUC.CRYSTAL_MODELS[i_shot]],
                                                                symbol="P43212")[0]
-                print("Rank %d, file=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
-                    rank, self.all_fnames[i_shot], angular_offset_ref, angular_offset_init, a_ref, a_init, c_ref, c_init))
+                print("Rank %d, file=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f, total_neg_pix=%d" % (
+                    rank, self.all_fnames[i_shot], angular_offset_ref, angular_offset_init, a_ref, a_init, c_ref, c_init, tot_negs))
             except Exception as err:
                 print("Rank %d, file=%d, error %s" % (rank, i_shot, err))
 
