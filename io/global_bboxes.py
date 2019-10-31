@@ -39,11 +39,14 @@ if rank == 0:
     parser.add_argument("--perimage", action="store_true")
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
+    parser.add_argument("--oversample", default=0, type=int)
+    parser.add_argument("--hack", action="store_true", help="use the local 6 tester files")
     parser.add_argument("--curvatures", action='store_true')
     parser.add_argument("--startwithtruth", action='store_true')
-    parser.add_argument("startwithopt", action="store_true")
+    parser.add_argument("--startwithopt", action="store_true")
     parser.add_argument("--testmode2", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
+    parser.add_argument("--partition", action="store_true")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
     args = parser.parse_args()
@@ -111,7 +114,7 @@ else:
 
 
 if has_mpi:
-    if rank==0:
+    if rank == 0:
         print("Broadcasting imports")
     #FatRefiner = comm.bcast(FatRefiner, root=0)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel)
@@ -138,7 +141,7 @@ if has_mpi:
     np_zeros = comm.bcast(np_zeros, root=0)
     np_sum = comm.bcast(np_sum, root=0)
     Process = comm.bcast(Process, root=0)
-    getpid = comm.bcast( getpid, root=0)
+    getpid = comm.bcast(getpid, root=0)
     numpy_load = comm.bcast(numpy_load, root=0)
     getrusage = comm.bcast(getrusage, root=0)
     RUSAGE_SELF = comm.bcast(RUSAGE_SELF, root=0)
@@ -194,7 +197,7 @@ class FatData:
         self.SIM.crystal = nbcryst
         self.SIM.beam = nbbeam
         self.SIM.panel_id = 0  # default
-        self.SIM.instantiate_diffBragg(default_F=0, oversample=0)
+        self.SIM.instantiate_diffBragg(default_F=0, oversample=args.oversample)
         self.SIM.D.spot_scale = 12
 
     # @profile
@@ -210,42 +213,69 @@ class FatData:
             self.time_load_start = time.time()
             print("I am root. I am calculating total number of shots")
             h5s = [h5py_File(f, "r") for f in self.fnames]
-            Nshots_per_file = [ h["h5_path"].shape[0] for h in h5s]
+            Nshots_per_file = [h["h5_path"].shape[0] for h in h5s]
             Nshots_tot = sum(Nshots_per_file)
             print("I am root. Total number of shots is %d" % Nshots_tot)
 
             print("I am root. I will divide shots amongst workers.")
             shot_tuples = []
+            roi_per = []
             for i_f, fname in enumerate(self.fnames):
                 fidx_shotidx = [(i_f, i_shot) for i_shot in range(Nshots_per_file[i_f])]
                 shot_tuples += fidx_shotidx
 
+                # store the number of usable roi per shot in order to divide shots amongst ranks equally
+                roi_per += [sum(h5s[i_f]["bboxes"]["keepers%d" % i_shot][()])
+                            for i_shot in range(Nshots_per_file[i_f])]
+
             from numpy import array_split
+            from numpy.random import permutation
             print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
+
+            # divide the array into chunks of roughly equal sum (total number of ROI)
+            if args.partition:
+                diff = np.inf
+                roi_per = np.array(roi_per)
+                tstart = time.time()
+                best_order = range(len(roi_per))
+                print("Partitioning for better load balancing across ranks.. ")
+                while 1:
+                    order = permutation(len(roi_per))
+                    res = [sum(a) for a in np.array_split(roi_per[order], size)]
+                    new_diff = max(res) - min(res)
+                    if new_diff < diff:
+                        diff = new_diff
+                        best_order = order.copy()
+                        print("Best diff=%d" % diff)
+                    if time.time() - tstart > 5:
+                        break
+                shot_tuples = [shot_tuples[i] for i in best_order]
+
             shots_for_rank = array_split(shot_tuples, size)
 
             # NOTE: this is a hack for now
-            #md = np_load("results_big_proc12.txt.npz")
-            #h5f = h5py_File("/Users/dermen/cspadA/agg2/process_rank0.h5", "r")
-            #import os
-            #all_basename = [os.path.basename(ff).split(".npz")[0] for ff in h5f["h5_path"][()]]
-            #good_fnames = md["fnames"]
+            if args.hack:
+                md = np_load("results_big_proc12.txt.npz")
+                h5f = h5py_File("/Users/dermen/cspadA/agg2/process_rank0.h5", "r")
+                import os
+                all_basename = [os.path.basename(ff).split(".npz")[0] for ff in h5f["h5_path"][()]]
+                good_fnames = md["fnames"]
 
-            #shots_for_rank = []
+                shots_for_rank = []
 
-            ##good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
-            #for fname in good_fnames[:size]:
-            #    shot_pos = all_basename.index(fname)
-            #    shots_for_rank.append([(0, shot_pos)])
+                #good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
+                for fname in good_fnames[:size]:
+                    shot_pos = all_basename.index(fname)
+                    shots_for_rank.append([(0, shot_pos)])
 
 
-            #if args.boop:
-            #    shots_for_rank = [[]]
-            #    good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
-            #    for fname in good_fnames:
-            #        shot_pos = all_basename.index(fname)
-            #        shots_for_rank[0] += [(0, shot_pos)]
-            # NOTE end of hack
+                if args.boop:
+                    shots_for_rank = [[]]
+                    good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
+                    for fname in good_fnames:
+                        shot_pos = all_basename.index(fname)
+                        shots_for_rank[0] += [(0, shot_pos)]
+                # NOTE end of hack
 
             # close the open h5s..
             for h in h5s:
@@ -304,13 +334,15 @@ class FatData:
             C = Crystal(a_real, b_real, c_real, "P43212")
 
             ## NOTE: this is a temporary hack
-            #if args.startwithopt:
-            #    f_basename = os.path.basename(npz_path)
-            #    crystal_dir = "/Users/dermen/crystal/modules/cxid9114/io/crystals/"
-            #    crystal_name = crystal_dir + "/%s_refined.npy" % f_basename
-            #    assert os.path.exists(crystal_name), "Crystal file non existent"
-            #    refined_Amat = np_load(crystal_name)
-            #    C.set_A(tuple(refined_Amat))
+            if args.startwithopt:
+                exit()
+                assert args.hack
+                f_basename = os.path.basename(npz_path)
+                crystal_dir = "/Users/dermen/crystal/modules/cxid9114/io/crystals/"
+                crystal_name = crystal_dir + "/%s_refined.npy" % f_basename
+                assert os.path.exists(crystal_name), "Crystal file non existent"
+                refined_Amat = np_load(crystal_name)
+                C.set_A(tuple(refined_Amat))
             ## NOTE end hack
 
             # change basis here ? Or maybe just average a/b
@@ -613,9 +645,9 @@ class FatData:
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-        self.RUC.max_calls = 3000
+        self.RUC.max_calls = 30
         self.RUC.verbose = False
-        #self.RUC.use_rot_priors = True
+        self.RUC.use_rot_priors = True
         #self.RUC.use_ucell_priors = True
 
         if args.verbose:
