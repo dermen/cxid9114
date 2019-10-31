@@ -533,7 +533,7 @@ class FatData:
         n_rot_param = 3
         n_ncell_param = 1
         n_scale_param = 1
-        n_param_per_image = n_rot_param + self.n_ucell_param + n_ncell_param + n_scale_param
+        n_param_per_image = n_rot_param + n_ncell_param + n_scale_param
         self.n_param_per_image = n_param_per_image
         total_per_image_unknowns = n_param_per_image * n_images
         self.n_local_unknowns = total_per_image_unknowns
@@ -569,9 +569,9 @@ class FatData:
             total_local_unknowns = None
 
         self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
-        self.n_total_unknowns = self.local_unknowns_across_all_ranks + 2  # gain and detdist (originZ)
+        self.n_global_params = 2 + self.n_ucell_param # detdist and gain + ucell params
+        self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
         self.starts_per_rank = comm.bcast(starts_per_rank, root=0)
-        self.n_global_params = 2  # detdist and gain
 
     def refine(self):
         init_gain = 1
@@ -615,8 +615,8 @@ class FatData:
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
         self.RUC.max_calls = 3000
         self.RUC.verbose = False
-        self.RUC.use_rot_priors = True
-        self.RUC.use_ucell_priors = True
+        #self.RUC.use_rot_priors = True
+        #self.RUC.use_ucell_priors = True
 
         if args.verbose:
             if rank == 0:  # only show refinement stats for rank 0
