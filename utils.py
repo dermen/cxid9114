@@ -1,5 +1,4 @@
 
-import os
 import cPickle
 import numpy as np
 from dials.array_family import flex
@@ -7,6 +6,7 @@ from dxtbx.imageset import MemReader #, MemMasker
 from dxtbx.datablock import DataBlockFactory
 from dxtbx.imageset import ImageSet, ImageSetData
 from dxtbx.model.experiment_list import ExperimentListFactory
+from cctbx import sgtbx, miller
 
 
 class FormatInMemory:
@@ -234,3 +234,8 @@ def random_rotation(deflection=1.0, randnums=None):
     return mat.reshape(3, 3)
 
 
+def map_hkl_list(Hi_lst, anomalous_flag=True, symbol="P43212"):
+    sg_type = sgtbx.space_group_info(symbol=symbol).type()
+    Hi_flex = flex.miller_index(tuple(map(tuple, Hi_lst)))
+    miller.map_to_asu(sg_type, anomalous_flag, Hi_flex)
+    return list(Hi_flex)

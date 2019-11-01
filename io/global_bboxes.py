@@ -12,14 +12,14 @@ except ImportError:
     has_mpi = False
 from numpy import load as np_load
 
-from scitbx.array_family import flex
 from dxtbx.model.detector import DetectorFactory
 det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
 from simtbx.diffBragg.refiners.global_refiner import FatRefiner
-import numpy as np
-
+from cxid9114.utils import map_hkl_list
+import sys
+from IPython import embed
 
 # import functions on rank 0 only
 if rank == 0:
@@ -33,6 +33,7 @@ if rank == 0:
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
+    parser.add_argument("--loadonly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
     parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
@@ -72,6 +73,8 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
     from cxid9114.geom.multi_panel import CSPAD_refined as CSPAD
+    from cctbx.array_family import flex
+    from cctbx import sgtbx, miller
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
@@ -153,6 +156,8 @@ class FatData:
     def __init__(self):
         self.int_radius = 5  #
         self.gain = 28  # gain of panels, can be refined, can be panel dependent
+        self.symbol = "P43212"
+        self.anomalous_flag = True
         self.flux_min = 1e2  # minimum number of photons to simulate (assume flux is N-photons, e.g. 1 second exposure)
         self.n_ucell_param = 2  # tetragonal cell
         self.Nload = args.nload  #
@@ -169,36 +174,44 @@ class FatData:
         self.all_crystal_GT = {}
         self.all_xrel = {}
         self.all_yrel = {}
+        self.all_Hi_asu = {}
+        self.all_Hi = {}
         self.all_nanoBragg_rois = {}
         self.SIM = None  # simulator; one per rank!
         self.all_roi_imgs = {}
         self.all_fnames = {}
+        self.nbbeam = self.nbcryst = None
+        self.miller_data_map = None
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
         # create a nanoBragg crystal
-        nbcryst = nanoBragg_crystal()
-        nbcryst.dxtbx_crystal = init_crystal
-        nbcryst.thick_mm = 0.1
-        nbcryst.Ncells_abc = 30, 30, 30
-        nbcryst.miller_array = init_miller_array
-        nbcryst.n_mos_domains = 1
-        nbcryst.mos_spread_deg = 0.0
+        self.nbcryst = nanoBragg_crystal()
+        self.nbcryst.dxtbx_crystal = init_crystal
+        self.nbcryst.thick_mm = 0.1
+        self.nbcryst.Ncells_abc = 30, 30, 30
+        self.nbcryst.miller_array = init_miller_array
+        self.nbcryst.n_mos_domains = 1
+        self.nbcryst.mos_spread_deg = 0.0
 
         # create a nanoBragg beam
-        nbbeam = nanoBragg_beam()
-        nbbeam.size_mm = 0.001
-        nbbeam.unit_s0 = init_beam.get_unit_s0()
-        nbbeam.spectrum = init_spectrum
+        self.nbbeam = nanoBragg_beam()
+        self.nbbeam.size_mm = 0.001
+        self.nbbeam.unit_s0 = init_beam.get_unit_s0()
+        self.nbbeam.spectrum = init_spectrum
 
         # sim data instance
         self.SIM = SimData()
         self.SIM.detector = CSPAD
-        self.SIM.crystal = nbcryst
-        self.SIM.beam = nbbeam
+        self.SIM.crystal = self.nbcryst
+        self.SIM.beam = self.nbbeam
         self.SIM.panel_id = 0  # default
         self.SIM.instantiate_diffBragg(default_F=0, oversample=args.oversample)
         self.SIM.D.spot_scale = 12
+
+    def _process_miller_data(self):
+        idx, data = self.SIM.D.Fhkl_tuple
+        self.miller_data_map = {idx: val for idx, val in zip(idx, data)}
 
     # @profile
     def load(self):
@@ -358,6 +371,8 @@ class FatData:
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
+            # miller indices (not yet reduced by symm equivs)
+            Hi_dset = h["Hi"]["shot%d" % shot_idx]
             try:
                 panel_ids_dset = h["panel_ids"]["shot%d" % shot_idx]
                 has_panels = True
@@ -367,10 +382,13 @@ class FatData:
             # apply the filters:
             bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             tilt_abc = [tilt_abc_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+            Hi = [ tuple(Hi_dset[i_bb]) for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+
             if has_panels:
                 panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             else:
                 panel_ids = [0] * len(tilt_abc)
+
 
             # how many pixels do we have
             tot_pix = [(j2 - j1)*(i2 - i1) for i1, i2, j1, j2 in bboxes]
@@ -427,64 +445,15 @@ class FatData:
             if img_num == 0:  # only initialize the simulator after loading the first image
                 self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 
-            # load the image (NOTE: Dont forget to ditch its references!)
+            # map the miller array to ASU
+            Hi_asu = map_hkl_list(Hi, self.anomalous_flag, self.symbol)
+            #sg_type = sgtbx.space_group_info(symbol=self.symbol).type()
+            #Hi_flex = flex.miller_index(tuple(map(tuple, Hi)))
+            #miller.map_to_asu(sg_type, self.anomalous_flag, Hi_flex)  # mods Hi_flex in place
+            #Hi_asu = list(Hi_flex)
+
+            # copy the image as photons (NOTE: Dont forget to ditch its references!)
             img_in_photons = img/28.
-
-            ## It might be useful or necessary to do a per image refinement prior to the global...
-            #if self.per_image_refine_first:
-            #    #raise NotImplementedError
-            #    print("Rank %d, Starting refinement!" % rank)
-            #    try:
-            #        RUC = RefineAllMultiPanel(
-            #            spot_rois=bboxes,
-            #            abc_init=tilt_abc,
-            #            img=img_in_photons,
-            #            SimData_instance=self.SIM,
-            #            plot_images=args.plot,
-            #            plot_residuals=args.residual,
-            #            ucell_manager=ucell_man)
-
-            #        RUC.panel_ids = panel_ids
-            #        RUC.split_evaluation = False #True
-            #        RUC.trad_conv = True
-            #        RUC.refine_detdist = False
-            #        RUC.refine_background_planes = False
-            #        RUC.refine_Umatrix = True
-            #        RUC.refine_Bmatrix = True
-            #        RUC.refine_ncells = True
-            #        RUC.use_curvatures = False  # args.curvatures
-            #        RUC.calc_curvatures = True  # args.curvatures
-            #        RUC.refine_crystal_scale = True
-            #        RUC.refine_gain_fac = False
-            #        RUC.plot_stride = args.stride
-            #        RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-            #        RUC.max_calls = 300
-            #        RUC.verbose = False
-            #        if args.verbose:
-            #            if rank == 0:  # only show refinement stats for rank 0
-            #                RUC.verbose = True
-            #        RUC.run()
-            #        if RUC.hit_break_to_use_curvatures:
-            #            RUC.use_curvatures = True
-            #            RUC.run(setup=False)
-            #    except AssertionError as err:
-            #        print("Rank %d, filename %s Hit assertion error during refinement: %s" % (rank, data.filename, err))
-            #        continue
-
-            #    angle, ax = RUC.get_correction_misset(as_axis_angle_deg=True)
-            #    C.rotate_around_origin(ax, angle)
-            #    C.set_B(RUC.get_refined_Bmatrix())
-            #    a_ref, _, c_ref, _, _, _ = C.get_unit_cell().parameters()
-            #    # compute missorientation with ground truth model
-            #    try:
-            #        angular_offset = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
-            #        print("Rank %d, filename=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f" % (
-            #            rank, data.filename, angular_offset, angular_offset_init, a_ref, a_init, c_ref, c_init))
-            #    except Exception as err:
-            #        print("Rank %d, filename=%s, error %s" % (rank, data.filename, err))
-
-            #    # free the memory from diffBragg instance
-            #    RUC.S.D.free_all()
 
             # Here, takeout from the image only whats necessary to perform refinement
             # first filter the spot rois so they dont occur exactly at the boundary of the image (inclusive range in nB)
@@ -524,14 +493,6 @@ class FatData:
                   % (rank, Ntot, len(bboxes), n_bboxes_total,  img_num +1, len(my_shots), mem)
             self.all_pix += Ntot
 
-            #n = 30
-            #bboxes = bboxes[:n]
-            #tilt_abc = tilt_abc[:n]
-            #panel_ids = panel_ids[:n]
-            #nanoBragg_rois = nanoBragg_rois[:n]
-            #xrel = xrel[:n]
-            #yrel = yrel[:n]
-
             # TODO: accumulate per-shot information
             self.all_spot_roi[img_num] = bboxes
             self.all_abc_inits[img_num] = tilt_abc
@@ -545,6 +506,8 @@ class FatData:
             self.all_nanoBragg_rois[img_num] = nanoBragg_rois
             self.all_roi_imgs[img_num] = roi_img
             self.all_fnames[img_num] = npz_path
+            self.all_Hi[img_num] = Hi
+            self.all_Hi_asu[img_num] = Hi_asu
 
         for h in my_open_files.values():
             h.close()
@@ -553,10 +516,21 @@ class FatData:
 
     def _usage(self):
         mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
-        mem = mem / 1e6  # convert to GB
+        conv = 1e-6
+        try:
+            if "darwin" in sys.platform:
+                conv = 1e-9
+        except:
+            pass
+        mem = mem * conv  # convert to GB
         return mem
 
     def tally_statistics(self):
+
+        # tally up all miller indices in this refinement
+        self._gather_Hi_information()
+        self.num_hkl_global = len(self.idx_from_asu)
+
         n_images = len(self.all_spot_roi)
         self.n_images = n_images
         n_spot_per_image = [len(self.all_spot_roi[i_image]) for i_image in range(n_images)]
@@ -574,7 +548,6 @@ class FatData:
         print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
               % (comm.rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
 
-        comm.Barrier()
         n_images = comm.reduce(n_images, MPI.SUM, root=0)
         n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
         total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
@@ -583,9 +556,18 @@ class FatData:
 
         if comm.rank == 0:
             total_local_unknowns = sum(local_unknowns_per_rank)
+        else:
+            total_local_unknowns = None
+
+        self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
+        self.n_global_params = 2 + self.n_ucell_param + self.num_hkl_global  # detdist and gain + ucell params
+        self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
+
+        comm.Barrier()
+        if comm.rank == 0:
             print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
-            print("MPIWORLD TOTALZ: images=%d, spots=%d, pixels=%2.2g, unknowns=%d, usage=%2.2g GigaBytes"
-                  % (n_images, n_spot_tot, total_pix, total_local_unknowns, mem_tot))
+            print("MPIWORLD TOTALZ: images=%d, spots=%d, pixels=%2.2g, Nlocal/Nglboal=%d/%d, usage=%2.2g GigaBytes"
+                  % (n_images, n_spot_tot, total_pix, total_local_unknowns,self.n_global_params, mem_tot))
             print("Total time elapsed= %.4f seconds" % (time.time()-self.time_load_start))
             print("<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>\n")
 
@@ -598,12 +580,32 @@ class FatData:
                 xpos += n_unknown
         else:
             starts_per_rank = None
-            total_local_unknowns = None
 
-        self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
-        self.n_global_params = 2 + self.n_ucell_param # detdist and gain + ucell params
-        self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
         self.starts_per_rank = comm.bcast(starts_per_rank, root=0)
+
+    def _gather_Hi_information(self):
+        nshots_on_this_rank = len(self.all_Hi)
+        H, Hasu = [], []
+        for i in range(nshots_on_this_rank):
+            H += B.all_Hi[i]
+            Hasu += B.all_Hi_asu[i]
+
+        print("Rank %d: Num miller vars on rank=%d" % (comm.rank, len(set(Hasu))))
+
+        Hi_all_ranks = comm.reduce(H, root=0)  # adding python lists concatenates them
+        self.Hi_all_ranks = comm.bcast(Hi_all_ranks, root=0)
+
+        Hi_asu_all_ranks = comm.reduce(Hasu, root=0)
+        self.Hi_asu_all_ranks = comm.bcast(Hi_asu_all_ranks, root=0)
+
+        # after gather
+        if comm.rank == 0:
+            print("Rank %d: total miller vars=%d" % (comm.rank, len(set(Hi_asu_all_ranks))))
+
+        # this will map the measured miller indices to their index in the LBFGS parameter array self.x
+        self.idx_from_asu = {h: i for i, h in enumerate(set(self.Hi_asu_all_ranks))}
+        # we will need the inverse map during refinement to update the miller array in diffBragg, so we cache it here
+        self.asu_from_idx = {i: h for i, h in enumerate(set(self.Hi_asu_all_ranks))}
 
     def refine(self):
         init_gain = 1
@@ -620,10 +622,13 @@ class FatData:
             shot_roi_imgs=self.all_roi_imgs, shot_spectra=self.all_spectra,
             shot_crystal_GTs=self.all_crystal_GT, shot_crystal_models=self.all_crystal_models,
             shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
+            shot_asu=self.all_Hi_asu,
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
             init_gain=init_gain)
 
+        self.RUC.idx_from_asu = self.idx_from_asu
+        self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.plot_images = args.plot
         self.RUC.plot_residuals = args.residual
         self.RUC.plot_statistics = args.plotstats
@@ -636,6 +641,7 @@ class FatData:
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
         self.RUC.refine_Umatrix = True
+        self.RUC.refine_Fcell = True
         self.RUC.refine_Bmatrix = True
         self.RUC.refine_ncells = True
         self.RUC.refine_crystal_scale = True
@@ -666,7 +672,6 @@ class FatData:
                 RUC.x = flex.double(x)
                 f, g = RUC.compute_functional_and_gradients()
                 return f
-
 
             def fprime(x, RUC):
                 RUC.calc_func = False
@@ -736,6 +741,10 @@ B.fnames = fnames
 B.load()
 comm.Barrier()
 B.tally_statistics()
+
+if args.loadonly:
+    comm.Abort()
+
 B.refine()
 comm.Barrier()
 B.print_results()
