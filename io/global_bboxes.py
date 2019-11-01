@@ -651,7 +651,7 @@ class FatData:
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-        self.RUC.max_calls = 30
+        self.RUC.max_calls = 3000
         self.RUC.verbose = False
         self.RUC.use_rot_priors = True
         #self.RUC.use_ucell_priors = True
@@ -749,3 +749,6 @@ B.refine()
 comm.Barrier()
 B.print_results()
 
+if comm.rank==0:
+    from IPython import embed
+    embed()
