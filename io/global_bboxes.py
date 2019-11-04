@@ -48,6 +48,7 @@ if rank == 0:
     parser.add_argument("--testmode2", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--partition", action="store_true")
+    parser.add_argument("--partitiontime", default=5, type=float, help="seconds allowed for partitioning inputs")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
     parser.add_argument("--umatrix", action="store_true")
@@ -55,6 +56,7 @@ if rank == 0:
     parser.add_argument("--fcell", action="store_true")
     parser.add_argument("--ncells", action="store_true")
     parser.add_argument("--scale", action="store_true")
+    parser.add_argument("--plotfcell", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
 
     args = parser.parse_args()
@@ -267,7 +269,7 @@ class FatData:
                         diff = new_diff
                         best_order = order.copy()
                         print("Best diff=%d" % diff)
-                    if time.time() - tstart > 15:
+                    if time.time() - tstart > args.partitiontime:
                         break
                 shot_tuples = [shot_tuples[i] for i in best_order]
 
@@ -336,7 +338,7 @@ class FatData:
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
 
-            if len(img.shape) == 2:  # if single panel>>
+            if len(img.shape) == 2:  # if single panel
                 img = array([img])
 
             # D = det_from_dict(img_handle["det"][()])
@@ -581,7 +583,7 @@ class FatData:
             print("Total time elapsed= %.4f seconds" % (time.time()-self.time_load_start))
             print("<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>\n")
 
-            # determine where i the global parameter array does this ranks
+            # determine where in the global parameter array does this rank
             # parameters begin
             starts_per_rank = {}
             xpos = 0
@@ -638,12 +640,17 @@ class FatData:
             init_gain=init_gain,
             perturb_fcell=args.perturbfcell)
 
-        self.RUC.idx_from_asu = self.idx_from_asu
-        self.RUC.asu_from_idx = self.asu_from_idx
+        # plot things
         self.RUC.plot_images = args.plot
+        self.RUC.plot_fcell = args.plotfcell
         self.RUC.plot_residuals = args.residual
         self.RUC.plot_statistics = args.plotstats
         self.RUC.setup_plots()
+
+        self.RUC.log_fcells = True
+
+        self.RUC.idx_from_asu = self.idx_from_asu
+        self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
         self.RUC.has_pre_cached_roi_data = True
@@ -651,6 +658,7 @@ class FatData:
         self.RUC.trad_conv = True
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
+        self.RUC.S.D.update_oversample_during_refinement = False
         self.RUC.refine_Umatrix = args.umatrix
         self.RUC.refine_Fcell = args.fcell
         self.RUC.refine_Bmatrix = args.bmatrix
@@ -661,10 +669,10 @@ class FatData:
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
-        self.RUC.trad_conv_eps = 5e-5  # NOTE this is for single panel model
+        self.RUC.trad_conv_eps = 5e-4  # NOTE this is for single panel model
         self.RUC.max_calls = 30000
         self.RUC.verbose = False
-        self.RUC.use_rot_priors = True
+        #self.RUC.use_rot_priors = True
         #self.RUC.use_ucell_priors = True
 
         if args.verbose:
