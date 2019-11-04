@@ -51,6 +51,13 @@ if rank == 0:
     parser.add_argument("--partitiontime", default=5, type=float, help="seconds allowed for partitioning inputs")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
+    parser.add_argument("--umatrix", action="store_true")
+    parser.add_argument("--bmatrix", action="store_true")
+    parser.add_argument("--fcell", action="store_true")
+    parser.add_argument("--ncells", action="store_true")
+    parser.add_argument("--scale", action="store_true")
+    parser.add_argument("--perturbfcell", default=None, type=float)
+
     args = parser.parse_args()
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
@@ -261,7 +268,11 @@ class FatData:
                         diff = new_diff
                         best_order = order.copy()
                         print("Best diff=%d" % diff)
+<<<<<<< HEAD
                     if time.time() - tstart > args.partitiontime:
+=======
+                    if time.time() - tstart > 15:
+>>>>>>> 3fe62b9543cfd7042fa36028fa78a4a47468e2bc
                         break
                 shot_tuples = [shot_tuples[i] for i in best_order]
 
@@ -444,7 +455,10 @@ class FatData:
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
             if img_num == 0:  # only initialize the simulator after loading the first image
-                self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
+                Ci = C
+                if args.startwithtruth:
+                    Ci = C_tru
+                self.initialize_simulator(Ci, B, spectrum, Fhkl_guess.as_amplitude_array())
 
             # map the miller array to ASU
             Hi_asu = map_hkl_list(Hi, self.anomalous_flag, self.symbol)
@@ -626,7 +640,8 @@ class FatData:
             shot_asu=self.all_Hi_asu,
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
-            init_gain=init_gain)
+            init_gain=init_gain,
+            perturb_fcell=args.perturbfcell)
 
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
@@ -641,17 +656,21 @@ class FatData:
         self.RUC.trad_conv = True
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
-        self.RUC.refine_Umatrix = True
-        self.RUC.refine_Fcell = True
-        self.RUC.refine_Bmatrix = True
-        self.RUC.refine_ncells = True
-        self.RUC.refine_crystal_scale = True
+        self.RUC.refine_Umatrix = args.umatrix
+        self.RUC.refine_Fcell = args.fcell
+        self.RUC.refine_Bmatrix = args.bmatrix
+        self.RUC.refine_ncells = args.ncells
+        self.RUC.refine_crystal_scale = args.scale
         self.RUC.refine_gain_fac = args.gainrefine
         self.RUC.use_curvatures = False  # args.curvatures
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
+<<<<<<< HEAD
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
+=======
+        self.RUC.trad_conv_eps = 5e-5  # NOTE this is for single panel model
+>>>>>>> 3fe62b9543cfd7042fa36028fa78a4a47468e2bc
         self.RUC.max_calls = 30000
         self.RUC.verbose = False
         self.RUC.use_rot_priors = True
