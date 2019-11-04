@@ -268,11 +268,7 @@ class FatData:
                         diff = new_diff
                         best_order = order.copy()
                         print("Best diff=%d" % diff)
-<<<<<<< HEAD
                     if time.time() - tstart > args.partitiontime:
-=======
-                    if time.time() - tstart > 15:
->>>>>>> 3fe62b9543cfd7042fa36028fa78a4a47468e2bc
                         break
                 shot_tuples = [shot_tuples[i] for i in best_order]
 
@@ -666,11 +662,7 @@ class FatData:
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
-<<<<<<< HEAD
-        self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-=======
-        self.RUC.trad_conv_eps = 5e-5  # NOTE this is for single panel model
->>>>>>> 3fe62b9543cfd7042fa36028fa78a4a47468e2bc
+        self.RUC.trad_conv_eps = 5e-4  # NOTE this is for single panel model
         self.RUC.max_calls = 30000
         self.RUC.verbose = False
         self.RUC.use_rot_priors = True
