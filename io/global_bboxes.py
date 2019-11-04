@@ -48,6 +48,7 @@ if rank == 0:
     parser.add_argument("--testmode2", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--partition", action="store_true")
+    parser.add_argument("--partitiontime", default=5, type=float, help="seconds allowed for partitioning inputs")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
     args = parser.parse_args()
@@ -260,7 +261,7 @@ class FatData:
                         diff = new_diff
                         best_order = order.copy()
                         print("Best diff=%d" % diff)
-                    if time.time() - tstart > 5:
+                    if time.time() - tstart > args.partitiontime:
                         break
                 shot_tuples = [shot_tuples[i] for i in best_order]
 
@@ -329,7 +330,7 @@ class FatData:
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
 
-            if len(img.shape) == 2:  # if single panel>>
+            if len(img.shape) == 2:  # if single panel
                 img = array([img])
 
             # D = det_from_dict(img_handle["det"][()])
@@ -651,7 +652,7 @@ class FatData:
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-3  # NOTE this is for single panel model
-        self.RUC.max_calls = 3000
+        self.RUC.max_calls = 30000
         self.RUC.verbose = False
         self.RUC.use_rot_priors = True
         #self.RUC.use_ucell_priors = True
