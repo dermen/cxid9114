@@ -338,7 +338,7 @@ class FatData:
             img_handle = numpy_load(npz_path)
             img = img_handle["img"]
 
-            if len(img.shape) == 2:  # if single panel>>
+            if len(img.shape) == 2:  # if single panel
                 img = array([img])
 
             # D = det_from_dict(img_handle["det"][()])
@@ -669,7 +669,7 @@ class FatData:
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.poisson_only = False
         self.RUC.plot_stride = args.stride
-        self.RUC.trad_conv_eps = 5e-5  # NOTE this is for single panel model
+        self.RUC.trad_conv_eps = 5e-4  # NOTE this is for single panel model
         self.RUC.max_calls = 30000
         self.RUC.verbose = False
         #self.RUC.use_rot_priors = True
