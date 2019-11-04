@@ -583,7 +583,7 @@ class FatData:
             print("Total time elapsed= %.4f seconds" % (time.time()-self.time_load_start))
             print("<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>\n")
 
-            # determine where i the global parameter array does this ranks
+            # determine where in the global parameter array does this rank
             # parameters begin
             starts_per_rank = {}
             xpos = 0
@@ -672,7 +672,7 @@ class FatData:
         self.RUC.trad_conv_eps = 5e-5  # NOTE this is for single panel model
         self.RUC.max_calls = 30000
         self.RUC.verbose = False
-        self.RUC.use_rot_priors = True
+        #self.RUC.use_rot_priors = True
         #self.RUC.use_ucell_priors = True
 
         if args.verbose:
