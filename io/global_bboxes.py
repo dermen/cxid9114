@@ -56,6 +56,7 @@ if rank == 0:
     parser.add_argument("--fcell", action="store_true")
     parser.add_argument("--ncells", action="store_true")
     parser.add_argument("--scale", action="store_true")
+    parser.add_argument("--plotfcell", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
 
     args = parser.parse_args()
@@ -639,12 +640,17 @@ class FatData:
             init_gain=init_gain,
             perturb_fcell=args.perturbfcell)
 
-        self.RUC.idx_from_asu = self.idx_from_asu
-        self.RUC.asu_from_idx = self.asu_from_idx
+        # plot things
         self.RUC.plot_images = args.plot
+        self.RUC.plot_fcell = args.plotfcell
         self.RUC.plot_residuals = args.residual
         self.RUC.plot_statistics = args.plotstats
         self.RUC.setup_plots()
+
+        self.RUC.log_fcells = True
+
+        self.RUC.idx_from_asu = self.idx_from_asu
+        self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
         self.RUC.has_pre_cached_roi_data = True
@@ -652,6 +658,7 @@ class FatData:
         self.RUC.trad_conv = True
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
+        self.RUC.S.D.update_oversample_during_refinement = False
         self.RUC.refine_Umatrix = args.umatrix
         self.RUC.refine_Fcell = args.fcell
         self.RUC.refine_Bmatrix = args.bmatrix
