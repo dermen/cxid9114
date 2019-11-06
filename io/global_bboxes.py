@@ -33,11 +33,14 @@ if rank == 0:
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
+    parser.add_argument("--sad", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
+    parser.add_argument("--poissononly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
     parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--perimage", action="store_true")
+    parser.add_argument('--perturblist', nargs='+', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--oversample", default=0, type=int)
@@ -57,6 +60,7 @@ if rank == 0:
     parser.add_argument("--ncells", action="store_true")
     parser.add_argument("--scale", action="store_true")
     parser.add_argument("--plotfcell", action="store_true")
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
 
     args = parser.parse_args()
@@ -81,7 +85,8 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    from cxid9114.geom.multi_panel import CSPAD_refined as CSPAD
+    #from cxid9114.geom.multi_panel import CSPAD_refined as CSPAD
+    from cxid9114.geom.multi_panel import CSPAD
     from cctbx.array_family import flex
     from cctbx import sgtbx, miller
 
@@ -160,6 +165,7 @@ if has_mpi:
     TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
 
+
 class FatData:
 
     def __init__(self):
@@ -199,6 +205,7 @@ class FatData:
         self.nbcryst.dxtbx_crystal = init_crystal
         self.nbcryst.thick_mm = 0.1
         self.nbcryst.Ncells_abc = 30, 30, 30
+
         self.nbcryst.miller_array = init_miller_array
         self.nbcryst.n_mos_domains = 1
         self.nbcryst.mos_spread_deg = 0.0
@@ -216,7 +223,10 @@ class FatData:
         self.SIM.beam = self.nbbeam
         self.SIM.panel_id = 0  # default
         self.SIM.instantiate_diffBragg(default_F=0, oversample=args.oversample)
-        self.SIM.D.spot_scale = 12
+        if args.sad:
+            self.SIM.D.spot_scale = .7
+        else:
+            self.SIM.D.spot_scale = 12
 
     def _process_miller_data(self):
         idx, data = self.SIM.D.Fhkl_tuple
@@ -455,6 +465,14 @@ class FatData:
                 Ci = C
                 if args.startwithtruth:
                     Ci = C_tru
+
+                if args.sad:
+                    #wavelen = ENERGY_CONV / ENERGY_LOW
+                    #flux = 1e12
+                    #spectrum = [(wavelen, flux)]
+                    from cxid9114.sf.struct_fact_special import load_4bs7_sf
+                    Fhkl_guess = load_4bs7_sf()
+
                 self.initialize_simulator(Ci, B, spectrum, Fhkl_guess.as_amplitude_array())
 
             # map the miller array to ASU
@@ -465,7 +483,7 @@ class FatData:
             #Hi_asu = list(Hi_flex)
 
             # copy the image as photons (NOTE: Dont forget to ditch its references!)
-            img_in_photons = img/28.
+            img_in_photons = (img/28.).astype('float32')
 
             # Here, takeout from the image only whats necessary to perform refinement
             # first filter the spot rois so they dont occur exactly at the boundary of the image (inclusive range in nB)
@@ -641,6 +659,7 @@ class FatData:
             perturb_fcell=args.perturbfcell)
 
         # plot things
+        self.RUC.debug = args.debug
         self.RUC.plot_images = args.plot
         self.RUC.plot_fcell = args.plotfcell
         self.RUC.plot_residuals = args.residual
@@ -649,6 +668,8 @@ class FatData:
 
         self.RUC.log_fcells = True
 
+        if args.perturblist is not None:
+            self.RUC._hacked_fcells = args.perturblist
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False
@@ -667,13 +688,13 @@ class FatData:
         self.RUC.refine_gain_fac = args.gainrefine
         self.RUC.use_curvatures = False  # args.curvatures
         self.RUC.calc_curvatures = args.curvatures
-        self.RUC.poisson_only = False
+        self.RUC.poisson_only = args.poissononly
         self.RUC.plot_stride = args.stride
-        self.RUC.trad_conv_eps = 5e-4  # NOTE this is for single panel model
+        self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
         self.RUC.max_calls = 30000
         self.RUC.verbose = False
-        #self.RUC.use_rot_priors = True
-        #self.RUC.use_ucell_priors = True
+        self.RUC.use_rot_priors = False
+        self.RUC.use_ucell_priors = False
 
         if args.verbose:
             if rank == 0:  # only show refinement stats for rank 0
@@ -698,7 +719,6 @@ class FatData:
                 RUC.x = flex.double(x)
                 f, g = RUC.compute_functional_and_gradients()
                 return g.as_numpy_array()
-
 
             from scipy.optimize import fmin_l_bfgs_b
             out = fmin_l_bfgs_b(func=func, x0=array(self.RUC.x),
@@ -768,6 +788,6 @@ B.refine()
 comm.Barrier()
 B.print_results()
 
-if comm.rank==0:
+if comm.rank == 0:
     from IPython import embed
     embed()
