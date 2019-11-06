@@ -1,3 +1,4 @@
+#!/usr/bin/env libtbx.python
 
 from argparse import ArgumentParser
 from copy import deepcopy
@@ -11,7 +12,7 @@ parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--nrank", type=int, default=1)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
 parser.add_argument("--sad",action="store_true")
-parser.add_argument("-o",help='output directoty',  type=str, default='.')
+parser.add_argument("-o", help='output directoty',  type=str, default='.')
 parser.add_argument("--plot", action="store_true")
 parser.add_argument("--usegt", action="store_true")
 parser.add_argument("--show_params", action='store_true')
@@ -28,6 +29,7 @@ import h5py
 from cxid9114.sim import sim_utils
 from cxid9114.geom.multi_panel import CSPAD
 
+
 from cxid9114 import parameters, utils
 from cxid9114.prediction import prediction_utils
 from simtbx.diffBragg.utils import tilting_plane
@@ -41,9 +43,9 @@ size = MPI.COMM_WORLD.size
 rank = MPI.COMM_WORLD.rank
 
 # Load in the reflection tables and experiment lists
-
-El_fnames, refl_fnames = [],[]
-for El_f in glob.glob(args.glob):
+Els = glob.glob(args.glob)
+El_fnames, refl_fnames = [], []
+for El_f in Els:
     name_base = El_f.split("_refined.expt")[0]
     refl_f = "%s_strong.refl" % name_base
     if os.path.exists(refl_f):
@@ -52,14 +54,14 @@ for El_f in glob.glob(args.glob):
 
 GAIN = 28
 
-
 if not os.path.exists(args.o) and rank == 0:
     os.makedirs(args.o)
 
 MPI.COMM_WORLD.Barrier()
 
 assert El_fnames
-
+if rank == 0:
+    print("I found %d fname" % len(El_fnames))
 all_paths = []
 all_Amats = []
 odir = args.o
@@ -94,8 +96,6 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     xtal_size = 0.0005  #h5["xtal_size_mm"][()]
 
     refls_data = utils.open_flex(refl_pkl)
-    # TODO multi panel
-    # Make a strong spot mask that is used to fit tilting planes
 
     FF = [1e3, None]  # NOTE: not sure what to do here, we dont know the structure factor
     FLUX = [total_flux * .5, total_flux*.5]
@@ -143,7 +143,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     Hi, bboxes, bbox_panel_ids, patches,Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
         refls_at_colors,
         DET, beams,
-        crystal, delta_q=0.0475, ret_Pvals=True,
+        crystal, delta_q=0.0375, ret_Pvals=True,
         data=img_data, ret_patches=True, refls_data=refls_data, gain=GAIN,
         fc='none', ec='r')  # ret_patches=True, fc='none', ec='w')
 
@@ -196,89 +196,89 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
     #writer.create_dataset("bg_pixel_mask/shot%d" % n_processed, data=is_bg_pixel, dtype=bool, compression="lzf")
 
-    sg96 = sgtbx.space_group(" P 4nw 2abw")
+    #sg96 = sgtbx.space_group(" P 4nw 2abw")
 
-    # ground truth structure factors ?
-    FA = load_4bs7_sf()
-    HA = tuple([hkl for hkl in FA.indices()])
-    HA_val_map = {h: data for h, data in zip(FA.indices(), FA.data())}
-    Hmaps = [HA_val_map]
+    ## ground truth structure factors ?
+    #FA = load_4bs7_sf()
+    #HA = tuple([hkl for hkl in FA.indices()])
+    #HA_val_map = {h: data for h, data in zip(FA.indices(), FA.data())}
+    #Hmaps = [HA_val_map]
 
-    def get_val_at_hkl(hkl, val_map):
-        poss_equivs = [i.h() for i in
-                       miller.sym_equiv_indices(sg96, hkl).indices()]
-        in_map = False
-        for hkl2 in poss_equivs:
-            if hkl2 in val_map:  # fast lookup
-                in_map = True
-                break
-        if in_map:
-            return hkl2, val_map[hkl2]
-        else:
-            return (None, None, None), -1
+    #def get_val_at_hkl(hkl, val_map):
+    #    poss_equivs = [i.h() for i in
+    #                   miller.sym_equiv_indices(sg96, hkl).indices()]
+    #    in_map = False
+    #    for hkl2 in poss_equivs:
+    #        if hkl2 in val_map:  # fast lookup
+    #            in_map = True
+    #            break
+    #    if in_map:
+    #        return hkl2, val_map[hkl2]
+    #    else:
+    #        return (None, None, None), -1
 
-    K = FF[0] ** 2 * FLUX[0] * exposure_s
-    LA = FLUX[0] * exposure_s
-    L_at_color = [LA]
+    #K = FF[0] ** 2 * FLUX[0] * exposure_s
+    #LA = FLUX[0] * exposure_s
+    #L_at_color = [LA]
 
-    Nh = len(Hi)
-    rhs = []
-    lhs = []
-    all_H2 = []
-    all_PA = []
-    all_PB = []
-    all_FA = []
-    all_FB = []
-    for i in range(Nh):
-        HKL = Hi[i]
-        yobs = integrated_Hi[i]
-        Pvals = Pterms[i]
-        ycalc = 0
+    #Nh = len(Hi)
+    #rhs = []
+    #lhs = []
+    #all_H2 = []
+    #all_PA = []
+    #all_PB = []
+    #all_FA = []
+    #all_FB = []
+    #for i in range(Nh):
+    #    HKL = Hi[i]
+    #    yobs = integrated_Hi[i]
+    #    Pvals = Pterms[i]
+    #    ycalc = 0
 
-        # NOTE only support for Pvals len==1
-        assert len(Pvals) == 1
-        for i_P, P in enumerate(Pvals):
-            L = L_at_color[i_P]
-            H2, F = get_val_at_hkl(HKL, Hmaps[i_P])
-            if i_P == 0:
-                all_FA.append(F)
-            #else:
-            #    all_FB.append(F)
+    #    # NOTE only support for Pvals len==1
+    #    assert len(Pvals) == 1
+    #    for i_P, P in enumerate(Pvals):
+    #        L = L_at_color[i_P]
+    #        H2, F = get_val_at_hkl(HKL, Hmaps[i_P])
+    #        if i_P == 0:
+    #            all_FA.append(F)
+    #        #else:
+    #        #    all_FB.append(F)
 
-            ycalc += L * P * abs(F) ** 2 / K
-        all_PA.append(Pvals[0])
-        #all_PB.append(Pvals[1])
-        all_H2.append(H2)
-        rhs.append(ycalc)
-        lhs.append(yobs)
-    all_PB = [0]*len(all_PA)
-    all_FB = [0]*len(all_FA)
-    df = pandas.DataFrame({"rhs": rhs, "lhs": lhs,
-                           "PA": all_PA, "PB": all_PB, "FA": all_FA,
-                           "FB": all_FB})
+    #        ycalc += L * P * abs(F) ** 2 / K
+    #    all_PA.append(Pvals[0])
+    #    #all_PB.append(Pvals[1])
+    #    all_H2.append(H2)
+    #    rhs.append(ycalc)
+    #    lhs.append(yobs)
+    #all_PB = [0]*len(all_PA)
+    #all_FB = [0]*len(all_FA)
+    #df = pandas.DataFrame({"rhs": rhs, "lhs": lhs,
+    #                       "PA": all_PA, "PB": all_PB, "FA": all_FA,
+    #                       "FB": all_FB})
 
-    df["run"] = rank
-    df["shot_idx"] = i_shot
-    df['gain'] = 1
+    #df["run"] = rank
+    #df["shot_idx"] = i_shot
+    #df['gain'] = 1
 
-    df['LA'] = LA
-    df['LB'] = 0
-    df['K'] = K
+    #df['LA'] = LA
+    #df['LB'] = 0
+    #df['K'] = K
 
-    h, k, l = zip(*all_H2)
-    df['h2'] = h
-    df['k2'] = k
-    df['l2'] = l
+    #h, k, l = zip(*all_H2)
+    #df['h2'] = h
+    #df['k2'] = k
+    #df['l2'] = l
 
-    pklname = fpath.replace(".h5.npz", ".pdpkl")
-    df.to_pickle(pklname)
+    #pklname = fpath.replace(".h5.npz", ".pdpkl")
+    #df.to_pickle(pklname)
 
-    if args.plot and rank == 0:
-        print("PLOT")
+    #if args.plot and rank == 0:
+    #    print("PLOT")
 
-        plt.plot(df.lhs, df.rhs, '.')
-        plt.show()
-    print("DonDonee")
+    #    plt.plot(df.lhs, df.rhs, '.')
+    #    plt.show()
+    #print("DonDonee")
 
     if rank == 0:
         print("Rank0: Done writing")

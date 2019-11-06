@@ -15,7 +15,6 @@ parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default=
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
 parser.add_argument("--sad", action="store_true")
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
-parser.add_argument("--datasf", action="store_true", help="whether to use data structure factors (NO ANOM)")
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true',
                     help="seed the random number generator with worker Id")
 parser.add_argument("--masterscale", type=float, default=None)
@@ -115,18 +114,14 @@ data_fluxes_all = h5py.File(spectra_file, "r")["hist_spec"][()] / exposure_s
 #data_fluxes_all = data_fluxes_all[args.startidx:]
 ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
 data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
-if args.datasf:
+if args.sad:
     print("Rank %d: Loading 4bs7 structure factors!" % comm.rank)
     data_sf = struct_fact_special.load_4bs7_sf()
-    data_sf = [data_sf] + [None] * (len(data_energies) - 1)
+    data_sf = [data_sf] 
 
 from cxid9114.parameters import ENERGY_LOW
-sad_idx = np.argmin(np.abs(data_energies - ENERGY_LOW))
-sad_range = range(sad_idx - 10, sad_idx + 10)
-n_sad = len(sad_range)
 if args.sad:
-    data_sf = [data_sf[0]] + [None] * (n_sad - 1)
-    data_energies = np.array([data_energies[i] for i in sad_range])
+    data_energies = np.array([ENERGY_LOW])
 
 beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
 
@@ -174,9 +169,7 @@ for i_data in range(args.num_trials):
     data_fluxes = data_fluxes_worker[i_data]
 
     if args.sad:
-        flux_sum = data_fluxes.sum()
-        data_fluxes = data_fluxes[sad_range]
-        data_fluxes = data_fluxes / data_fluxes.sum() * flux_sum
+        data_fluxes = np.array([ave_flux_across_exp])
 
     a = np.random.normal(a, args.ucelljitter)
     c = np.random.normal(c, args.ucelljitter)
@@ -252,7 +245,7 @@ for i_data in range(args.num_trials):
                   'adc_offset': adc_offset,
                   'show_params': args.show_params,
                   'crystal_size_mm': xtal_size_mm,
-                  'one_sf_array': data_sf[0] is not None and data_sf[1] is None}
+                  'one_sf_array': True} #data_sf[0] is not None and data_sf[1] is None}
 
     print ("Rank %d: SIULATING DATA IMAGE" % comm.rank)
     if args.optimize_oversample:

@@ -192,17 +192,27 @@ def load_4bs7_sf():
     Fanom = Fhkl.generate_bijvoet_mates()
     Fdiff = reader.build_miller_arrays()['r4bs7sf']['_refln.pdbx_anom_difference_1']
     
-    diff =  {h:[val,sig] for h,val,sig in zip(Fdiff.indices(), Fdiff.data(), Fdiff.sigmas())}
-    vals_anom = {h:[val,sig] for h,val,sig in zip(Fanom.indices(), Fanom.data(), Fanom.sigmas())}
+    diff = {h: [val, sig] for h, val, sig in zip(Fdiff.indices(), Fdiff.data(), Fdiff.sigmas())}
+    vals_anom = {h: [val, sig] for h, val, sig in zip(Fanom.indices(), Fanom.data(), Fanom.sigmas())}
     for H in diff:
-	H_neg = -H[0], -H[1], -H[2]
-	# compute Fhkl_minus
-        vals_anom[H_neg][0] = vals_anom[H_neg][0] - diff[H][0]
-        
+        H_neg = -H[0], -H[1], -H[2]
+        # compute Fhkl_minus
+        val_low = vals_anom[H_neg][0] - .5*diff[H][0]
+
+        vals_anom[H_neg][0] = val_low
+
+        val_high = vals_anom[H_neg][0] + .5*diff[H][0]
+        vals_anom[H][0] = val_high
+        if val_low < 0:
+            #res =
+            offset = abs(val_low)
+            vals_anom[H_neg][0] = val_low + offset*2
+            vals_anom[H][0] = val_high + offset*2
         # propagate the error
-	vals_anom[H_neg][1] = np.sqrt(vals_anom[H_neg][1]**2 + diff[H][1]**2)
+        vals_anom[H_neg][1] = np.sqrt(vals_anom[H_neg][1]**2 + diff[H][1]**2)
+        vals_anom[H][1] = np.sqrt(vals_anom[H_neg][1] ** 2 + diff[H][1] ** 2)
+
     hout = tuple(vals_anom.keys())
-    
     mil_idx = flex.miller_index(hout)
     Symm = Fhkl.crystal_symmetry()
     mil_set = miller.set(crystal_symmetry=Symm, indices=mil_idx, anomalous_flag=True)

@@ -16,3 +16,8 @@
 ```
 srun -n10 -c1 libtbx.python process_mpi.py  --sad --nrank 10 --ngpu 8 --glob "$DD/cssad/idx_out/idx-sad*refined.expt" -o $DD/cssad/agg --reflglob "$DD/cssad/idx_out/idx-sad_*strong.refl"
 ```
+### command used to process the 20000 SAD images
+
+```
+srun --pty -n1 ./process_sad_mpi.py  --ngpu 1 --nrank 1 --glob "$DD/sadpaint/index/*refined.expt" -o $DD/sadpaint/agg
+```
