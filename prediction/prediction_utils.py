@@ -1,5 +1,5 @@
 
-
+from IPython import embed
 import numpy as np
 from dials.array_family import flex
 from scitbx.matrix import sqr
@@ -137,6 +137,8 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         H, Hi, Q = refls_to_hkl(
             refls, detector, beam, crystal,  returnQ=True)
 
+        #embed()
+
         color_data["panel"].append(list(refls['panel']))
         color_data["Pterms"].append(list(refls["intensity.sum.value"]))
         color_data["Q"].append(list(Q))
@@ -161,6 +163,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     panel_ids = []
     all_spot_Pterms = []  # NOTE this is for the preliminary merging code
     all_spot_Pterms_color_idx = []
+    all_kept_Hi = []
     for H in unique_indexed_Hi:
         x_com = 0
         y_com = 0
@@ -199,7 +202,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         all_y.append(y_com / n_counts)
         all_spot_Pterms.append(spot_Pterms)
         all_spot_Pterms_color_idx.append(spot_Pterms_color_idx)
-
+        all_kept_Hi.append(H)
         x_com = x_com / n_counts
         y_com = y_com / n_counts
 
@@ -243,8 +246,11 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
             Yobs = (data_to_be_integrated*int_mask).sum() / gain
             integrated_Hi.append(Yobs)
 
-    unique_indexed_Hi = set(all_indexed_Hi)
-    return_lst = [list(unique_indexed_Hi), bboxes, panel_ids]
+    #unique_indexed_Hi = set(all_indexed_Hi)
+    return_lst = [all_kept_Hi, bboxes, panel_ids]
+
+    assert len(all_kept_Hi) == len(bboxes) == len(panel_ids)
+
     if ret_patches:
         #patch_coll = mpl.collections.PatchCollection(patches,
         #                  match_original=True)
