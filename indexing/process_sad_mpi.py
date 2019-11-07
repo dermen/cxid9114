@@ -2,16 +2,12 @@
 
 from argparse import ArgumentParser
 from copy import deepcopy
-from cxid9114.sf.struct_fact_special import load_4bs7_sf
-from cctbx import miller
-from cctbx import sgtbx
 
 parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--nrank", type=int, default=1)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
-parser.add_argument("--sad",action="store_true")
 parser.add_argument("-o", help='output directoty',  type=str, default='.')
 parser.add_argument("--plot", action="store_true")
 parser.add_argument("--usegt", action="store_true")
@@ -34,13 +30,13 @@ from cxid9114 import parameters, utils
 from cxid9114.prediction import prediction_utils
 from simtbx.diffBragg.utils import tilting_plane
 
-
 import glob
 import os
 
 n_gpu = args.ngpu
-size = MPI.COMM_WORLD.size
-rank = MPI.COMM_WORLD.rank
+comm = MPI.COMM_WORLD
+size = comm.size
+rank = comm.rank
 
 # Load in the reflection tables and experiment lists
 Els = glob.glob(args.glob)
@@ -101,10 +97,9 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     FLUX = [total_flux * .5, total_flux*.5]
     energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]
 
-    if args.sad:
-        FF.pop()
-        FLUX = [FLUX[0]*2]
-        energies.pop()
+    FF.pop()
+    FLUX = [FLUX[0]*2]
+    energies.pop()
 
     BEAM = El.beams()[0]
     DET = El.detectors()[0]
@@ -130,7 +125,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         beam.set_wavelength(parameters.ENERGY_CONV/en)
         try:
             # NOTE: this is a multi panel refl table
-            R = prediction_utils.refls_from_sims(simsAB[i_en], DET, BEAM, thresh=1e-2)
+            R = prediction_utils.refls_from_sims(simsAB[i_en], DET, beam, thresh=1e-2)
+            #R = prediction_utils.refls_from_sims(simsAB[i_en], DET, BEAM, thresh=1e-2)
         except:
             continue
         refls_at_colors.append(R)
@@ -140,12 +136,15 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         continue
 
     # this gets the integration shoeboxes, not to be confused with strong spot bound boxes
-    Hi, bboxes, bbox_panel_ids, patches,Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
+    Hi, bboxes, bbox_panel_ids, patches, Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
         refls_at_colors,
         DET, beams,
         crystal, delta_q=0.0375, ret_Pvals=True,
         data=img_data, ret_patches=True, refls_data=refls_data, gain=GAIN,
         fc='none', ec='r')  # ret_patches=True, fc='none', ec='w')
+    if len(Hi) != len(bbox_panel_ids):
+        print("There is something funky! different number of panels and Hi")
+        comm.Abort()
 
     # TODO per panel strong spot mask
     # dxtbx detector size is (fast scan x slow scan)

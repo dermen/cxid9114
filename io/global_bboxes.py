@@ -165,7 +165,6 @@ if has_mpi:
     TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
 
-
 class FatData:
 
     def __init__(self):
@@ -195,6 +194,8 @@ class FatData:
         self.SIM = None  # simulator; one per rank!
         self.all_roi_imgs = {}
         self.all_fnames = {}
+        self.all_proc_idx = {}
+        self.all_proc_fnames = {}
         self.nbbeam = self.nbcryst = None
         self.miller_data_map = None
 
@@ -388,6 +389,7 @@ class FatData:
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
             is_a_keeper = h["bboxes"]["keepers%d" % shot_idx][()]
 
+
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
             # miller indices (not yet reduced by symm equivs)
@@ -401,13 +403,13 @@ class FatData:
             # apply the filters:
             bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             tilt_abc = [tilt_abc_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
-            Hi = [ tuple(Hi_dset[i_bb]) for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+            Hi = [tuple(Hi_dset[i_bb]) for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
+            proc_file_idx = [i_bb for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
 
             if has_panels:
                 panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             else:
                 panel_ids = [0] * len(tilt_abc)
-
 
             # how many pixels do we have
             tot_pix = [(j2 - j1)*(i2 - i1) for i1, i2, j1, j2 in bboxes]
@@ -449,6 +451,7 @@ class FatData:
 
             #exit()
             fluxes *= es  # multiply by the exposure time
+            # TODO: wavelens should come from the imageset file itself
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
@@ -459,21 +462,20 @@ class FatData:
             if args.startwithtruth:
                 ucell_man = TetragonalManager(a=aa, c=cc)
 
+            if args.startwithtruth:
+                C = C_tru
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
             if img_num == 0:  # only initialize the simulator after loading the first image
-                Ci = C
-                if args.startwithtruth:
-                    Ci = C_tru
 
                 if args.sad:
-                    #wavelen = ENERGY_CONV / ENERGY_LOW
+                    from cxid9114.parameters import WAVELEN_LOW
+                    wavelen = WAVELEN_LOW
                     #flux = 1e12
-                    #spectrum = [(wavelen, flux)]
+                    spectrum = [(wavelen, fluxes[0])]
                     from cxid9114.sf.struct_fact_special import load_4bs7_sf
                     Fhkl_guess = load_4bs7_sf()
-
-                self.initialize_simulator(Ci, B, spectrum, Fhkl_guess.as_amplitude_array())
+                self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 
             # map the miller array to ASU
             Hi_asu = map_hkl_list(Hi, self.anomalous_flag, self.symbol)
@@ -536,8 +538,10 @@ class FatData:
             self.all_nanoBragg_rois[img_num] = nanoBragg_rois
             self.all_roi_imgs[img_num] = roi_img
             self.all_fnames[img_num] = npz_path
+            self.all_proc_fnames[img_num] = h.filename
             self.all_Hi[img_num] = Hi
             self.all_Hi_asu[img_num] = Hi_asu
+            self.all_proc_idx[img_num] = proc_file_idx
 
         for h in my_open_files.values():
             h.close()
@@ -695,6 +699,10 @@ class FatData:
         self.RUC.verbose = False
         self.RUC.use_rot_priors = False
         self.RUC.use_ucell_priors = False
+        self.RUC.FNAMES = self.all_fnames
+        self.RUC.PROC_FNAMES = self.all_proc_fnames
+        self.RUC.PROC_IDX = self.all_proc_idx
+        self.RUC.Hi = self.all_Hi
 
         if args.verbose:
             if rank == 0:  # only show refinement stats for rank 0
