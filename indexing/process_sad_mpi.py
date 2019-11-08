@@ -19,7 +19,6 @@ if args.plot:
     import pylab as plt
 import pandas
 from dxtbx.model.experiment_list import ExperimentListFactory
-from mpi4py import MPI
 import h5py
 
 from cxid9114.sim import sim_utils
@@ -34,9 +33,20 @@ import glob
 import os
 
 n_gpu = args.ngpu
-comm = MPI.COMM_WORLD
-size = comm.size
-rank = comm.rank
+
+try:
+    from mpi4py import MPI
+    comm = MPI.COMM_WORLD
+    size = comm.size
+    has_mpi = True
+    rank = comm.rank
+except ImportError:
+    size = 1
+    rank = 0
+    has_mpi = False
+
+if rank == 0:
+    print(args)
 
 # Load in the reflection tables and experiment lists
 Els = glob.glob(args.glob)
@@ -77,8 +87,10 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     iset = El.imagesets()[0]
     fpath = iset.get_path(0)
 
+    # get image pixels
     img_data = np.load(fpath)["img"]
 
+    # get simulation parameters
     h5 = h5py.File(fpath.replace(".npz", ""), 'r')
     mos_spread = h5["mos_spread"][()]
     Ncells_abc = tuple(h5["Ncells_abc"][()])
@@ -91,23 +103,22 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     total_flux = np.sum(spectrum)
     xtal_size = 0.0005  #h5["xtal_size_mm"][()]
 
+    # load reflections
     refls_data = utils.open_flex(refl_pkl)
 
-    FF = [1e3, None]  # NOTE: not sure what to do here, we dont know the structure factor
-    FLUX = [total_flux * .5, total_flux*.5]
-    energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]
+    # make a sad spectrum
+    FF = [1e3]  # NOTE: not sure what to do here, we dont know the structure factor
+    FLUX = [total_flux]
+    energies = [parameters.ENERGY_LOW]
 
-    FF.pop()
-    FLUX = [FLUX[0]*2]
-    energies.pop()
-
+    # loading the beam  (this might have wrong energy)
     BEAM = El.beams()[0]
-    DET = El.detectors()[0]
+    DET = El.detectors()[0]  # load detector
 
-    crystal = El.crystals()[0]
-    if args.usegt:
+    crystal = El.crystals()[0]  # load crystal
+    if args.usegt:  # if true then use the ground truth crystal A matrix for prediction
         crystal.set_A(h5["crystalA"][()])
-        DET = deepcopy(CSPAD)
+        DET = deepcopy(CSPAD)   # and use the ground truth CSPAD
     beams = []
     device_Id = rank % n_gpu
     simsAB = sim_utils.sim_colors(
@@ -144,7 +155,10 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         fc='none', ec='r')  # ret_patches=True, fc='none', ec='w')
     if len(Hi) != len(bbox_panel_ids):
         print("There is something funky! different number of panels and Hi")
-        comm.Abort()
+        if has_mpi:
+            comm.Abort()
+        else:
+            exit()
 
     # TODO per panel strong spot mask
     # dxtbx detector size is (fast scan x slow scan)

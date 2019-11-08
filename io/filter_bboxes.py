@@ -1,8 +1,15 @@
-from mpi4py import MPI
+try:
+    from mpi4py import MPI
 
-comm = MPI.COMM_WORLD
-rank = comm.rank
-size = comm.size
+    comm = MPI.COMM_WORLD
+    rank = comm.rank
+    size = comm.size
+
+    has_mpi = True
+except ImportError:
+    has_mpi = False
+    rank = 0
+    size = 1
 
 if rank == 0:
     from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -16,6 +23,7 @@ if rank == 0:
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     args = parser.parse_args()
+    print(args)
 
 # import functions on rank 0 only
 if rank == 0:
@@ -39,18 +47,19 @@ else:
     getpid = None
     args = 0
 
-glob = comm.bcast(glob, root=0)
-h5py_File = comm.bcast(h5py_File, root=0)
-Integrator = comm.bcast(Integrator, root=0)
-array = comm.bcast(array, root=0)
-sqrt = comm.bcast(sqrt, root=0)
-percentile = comm.bcast(percentile, root=0)
-np_zeros = comm.bcast(np_zeros, root=0)
-np_sum = comm.bcast(np_sum, root=0)
-Process = comm.bcast(Process, root=0)
-getpid = comm.bcast(getpid, root=0)
-numpy_load = comm.bcast(numpy_load, root=0)
-args = comm.bcast(args, root=0)
+if has_mpi:
+    glob = comm.bcast(glob, root=0)
+    h5py_File = comm.bcast(h5py_File, root=0)
+    Integrator = comm.bcast(Integrator, root=0)
+    array = comm.bcast(array, root=0)
+    sqrt = comm.bcast(sqrt, root=0)
+    percentile = comm.bcast(percentile, root=0)
+    np_zeros = comm.bcast(np_zeros, root=0)
+    np_sum = comm.bcast(np_sum, root=0)
+    Process = comm.bcast(Process, root=0)
+    getpid = comm.bcast(getpid, root=0)
+    numpy_load = comm.bcast(numpy_load, root=0)
+    args = comm.bcast(args, root=0)
 
 
 def get_memory_usage():
@@ -108,7 +117,8 @@ def main():
         h5s = None
 
     # Nshots_tot = comm.bcast( Nshots_tot, root=0)
-    shots_for_rank = comm.bcast(shots_for_rank, root=0)
+    if has_mpi:
+        shots_for_rank = comm.bcast(shots_for_rank, root=0)
     # h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
 
     my_shots = shots_for_rank[rank]

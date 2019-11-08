@@ -28,7 +28,7 @@ if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--plot", action='store_true')
-    parser.add_argument("--logdir", type=str, default='.', help="where to write log files (one per rank)")
+    parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
@@ -670,7 +670,7 @@ class FatData:
         self.RUC.plot_statistics = args.plotstats
         self.RUC.setup_plots()
 
-        self.RUC.log_fcells = True
+        self.RUC.log_fcells =True
 
         if args.perturblist is not None:
             self.RUC._hacked_fcells = args.perturblist
@@ -703,6 +703,7 @@ class FatData:
         self.RUC.PROC_FNAMES = self.all_proc_fnames
         self.RUC.PROC_IDX = self.all_proc_idx
         self.RUC.Hi = self.all_Hi
+        self.RUC.output_dir = args.outdir
 
         if args.verbose:
             if rank == 0:  # only show refinement stats for rank 0
