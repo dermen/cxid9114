@@ -1,11 +1,16 @@
 #!/usr/bin/env libtbx.python
 
-from mpi4py import MPI
+try:
+    from mpi4py import MPI
 
-comm = MPI.COMM_WORLD
-rank = comm.rank
-size = comm.size
-has_mpi = True
+    comm = MPI.COMM_WORLD
+    rank = comm.rank
+    size = comm.size
+    has_mpi = True
+except ImportError:
+    has_mpi = False
+    size = 1
+    rank = 0
 
 import argparse
 
@@ -47,7 +52,11 @@ parser.add_argument("--xtal_size_mm", type=float, default=None)
 parser.add_argument("--mos_spread_deg", type=float, default="0.01")
 parser.add_argument("--mos_doms", type=int, default=100)
 parser.add_argument("--xtal_size_jitter", type=float, default=None)
+
 args = parser.parse_args()
+
+if rank==0:
+    print (args)
 
 profile = args.profile
 cuda = args.gpu
@@ -79,8 +88,6 @@ import numpy as np
 from simtbx.nanoBragg import shapetype, nanoBragg
 from scitbx.array_family import flex
 from dxtbx.model.crystal import CrystalFactory
-from dials.algorithms.indexing.compare_orientation_matrices \
-    import rotation_matrix_differences, difference_rotation_matrix_axis_angle
 
 from cxid9114.sf import struct_fact_special
 from cxid9114 import parameters
@@ -102,7 +109,7 @@ if args.cspad:  # use a cspad for simulation
     DET = CSPAD  # rename
 
 if args.use_rank_as_seed:
-    np.random.seed(comm.rank)
+    np.random.seed(rank)
 else:
     np.random.seed(args.seed)
 
@@ -115,24 +122,25 @@ data_fluxes_all = h5py.File(spectra_file, "r")["hist_spec"][()] / exposure_s
 ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
 data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
 if args.sad:
-    print("Rank %d: Loading 4bs7 structure factors!" % comm.rank)
+    print("Rank %d: Loading 4bs7 structure factors!" % rank)
     data_sf = struct_fact_special.load_4bs7_sf()
     data_sf = [data_sf] 
 
-from cxid9114.parameters import ENERGY_LOW
+from cxid9114.parameters import ENERGY_LOW, WAVELEN_LOW
 if args.sad:
     data_energies = np.array([ENERGY_LOW])
+BEAM.set_wavelength(WAVELEN_LOW)
 
 beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
 
-data_fluxes_worker = np.array_split(data_fluxes_all, comm.size)[comm.rank]
-data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), comm.size)[comm.rank]
+data_fluxes_worker = np.array_split(data_fluxes_all, size)[rank]
+data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
 a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
 hall = data_sf[0].space_group_info().type().hall_symbol()
 
 # Each rank (worker)  gets its own output directory
 odir = args.odir
-odirj = os.path.join(odir, "job%d" % comm.rank)
+odirj = os.path.join(odir, "job%d" % rank)
 if not os.path.exists(odirj):
     os.makedirs(odirj)
 
@@ -142,22 +150,22 @@ if add_background:
     if args.cspad:
         assert background.shape == (64, 185, 194)
 
-print("Rank %d Begin" % comm.rank)
+print("Rank %d Begin" % rank)
 for i_data in range(args.num_trials):
     flux_id = data_fluxes_idx[i_data]
-    h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, comm.rank, i_data, flux_id)
+    h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, rank, i_data, flux_id)
     h5name = os.path.join(odirj, h5name)
     if os.path.exists(h5name) and not args.overwrite:
         print("Rank %d: skipping- image %s already exists!" \
-              % (comm.rank, h5name))
+              % (rank, h5name))
         continue
 
     print("<><><><><><><")
-    print("Rank %d:  trial  %d / %d" % (comm.rank, i_data + 1, args.num_trials))
+    print("Rank %d:  trial  %d / %d" % (rank, i_data + 1, args.num_trials))
     print("<><><><><><><")
 
     # If im the zeroth worker I want to show usage statisitcs:
-    if comm.rank == 0 and i_data % smi_stride == 0 and cuda:
+    if rank == 0 and i_data % smi_stride == 0 and cuda:
         print("GPU status")
         os.system("nvidia-smi")
 
@@ -208,7 +216,7 @@ for i_data in range(args.num_trials):
     # the following will override some parameters
     # to aid simulation of a background image using same pipeline
     if make_background:
-        print("Rank %d: MAKING BACKGROUND : just at two colors" % comm.rank)
+        print("Rank %d: MAKING BACKGROUND : just at two colors" % rank)
         data_fluxes = [ave_flux_across_exp * .5, ave_flux_across_exp * .5]
         data_energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]  # should be 8944 and 9034
         data_sf = [1, 1]  # dont care about structure factors when simulating background water scatter
@@ -247,7 +255,7 @@ for i_data in range(args.num_trials):
                   'crystal_size_mm': xtal_size_mm,
                   'one_sf_array': True} #data_sf[0] is not None and data_sf[1] is None}
 
-    print ("Rank %d: SIULATING DATA IMAGE" % comm.rank)
+    print ("Rank %d: SIULATING DATA IMAGE" % rank)
     if args.optimize_oversample:
         oversample = 1
         reference = None
@@ -265,9 +273,9 @@ for i_data in range(args.num_trials):
                 where_one_photon = np.where(simsDataSum > 1)
                 N_over_sigma = (residual[where_one_photon] > np.sqrt(reference[where_one_photon])).sum()
                 print ("Rank%d : Oversample = %d; |Residual| summed = %f; N over sigma: %d" \
-                       % (comm.rank, oversample, residual.sum(), N_over_sigma))
+                       % (rank, oversample, residual.sum(), N_over_sigma))
                 if np.allclose(simsDataSum, reference, atol=4):
-                    print ("Rank %d: Optimal oversample for current parameters: %d\nGoodbyw" % (comm.rank, oversample))
+                    print ("Rank %d: Optimal oversample for current parameters: %d\nGoodbyw" % (rank, oversample))
                     sys.exit()
                 reference = simsDataSum
             oversample += 1
@@ -293,12 +301,12 @@ for i_data in range(args.num_trials):
             np.savez("testbg_mono.npz", img=simsDataSum[0],
                      det=DET.to_dict(),
                      beam=BEAM.to_dict())
-        print ("Rank %d: Background made! Saved to file %s" % (comm.rank, args.bg_name))
+        print ("Rank %d: Background made! Saved to file %s" % (rank, args.bg_name))
         # force an exit here if making a background...
         sys.exit()
 
     if add_background:
-        print("Rank %d: ADDING BG" % comm.rank)
+        print("Rank %d: ADDING BG" % rank)
         # background was made using average flux over all shots, so scale it up/down here
         bg_scale = data_fluxes.sum() / ave_flux_across_exp
         # TODO consider varying the background level to simultate jet thickness jitter
@@ -308,7 +316,7 @@ for i_data in range(args.num_trials):
             simsDataSum[0] += background * bg_scale
 
     if add_noise:
-        print("Rank %d: ADDING NOISE" % comm.rank)
+        print("Rank %d: ADDING NOISE" % rank)
         for pidx in range(len(DET)):
             SIM = nanoBragg(detector=DET, beam=BEAM, panel_id=pidx)
             SIM.beamsize_mm = beamsize_mm
@@ -340,7 +348,7 @@ for i_data in range(args.num_trials):
 
     if args.write_img:
 
-        print "Rank %d: SAVING DATAFILE" % comm.rank
+        print "Rank %d: SAVING DATAFILE" % rank
         if args.cspad:
             np.savez(h5name + ".npz",
                      img=simsDataSum.astype(np.float32),
@@ -368,4 +376,4 @@ for i_data in range(args.num_trials):
         fout.create_dataset("gain", data=GAIN)
         fout.close()
 
-    print("Rank %d: DonDonee" % comm.rank)
+    print("Rank %d: DonDonee" % rank)
