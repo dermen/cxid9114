@@ -1,0 +1,361 @@
+\documentclass[dists.tex]{subfiles}
+
+\begin{document}
+
+\section{Probability of observing pixel values}
+
+\subsection{Photons as random variables}
+We model each pixel measurement as a sum of two independent random variables
+\be
+X = \text{photons} + \text{readout}
+\ee
+
+\noindent
+We assume that the number of photons arriving in each pixel is sampled according to a Poisson Distribution $\mathcal{P}(I)$ where $I$ represents the expected number of photons scattered into the pixel, and that a pixel's readout noise is sampled according to a Normal distribution $\mathcal{N}(0, \sigma_r)$ where $\sigma_r$ is some small number usually around 3. 
+
+\noindent We know that the probability distribution of the sum of two random variables is the convolution of the individual distributions. This is a complex expression for a Poisson variable and a Gaussian variable, however we assume that in our measurement the ``readout" component will dominate for small $X$ and the ``photons" component will dominate for large $X$, and we therefore approximate $\mathcal{P}(I) \approx \mathcal{N}(I, \sqrt{I}) $ according to the central limit theorem. While this introduces model inaccuracy for small X, we assume this inaccuracy is dominated by the readout noise. The combined probability distribution is now a convolution of two normal distributions, which is a straightforward expression
+\be \label {sampleX}
+\text{probability of X} = \mathcal{N}(I, \sqrt{I + \sigma_r^2}) 
+\ee
+
+\begin{comment}
+\noindent The Log-likelihood of multiple observations of X is then
+\beq
+&&\log \prod_\text{pixels}  \frac{1}{\sqrt{2\pi(I + \sigma_r^2)}} \exp \bigg(\frac{-(X-I)^2}{2(I + \sigma_r^2)}\bigg) \nonumber \\ 
+ &=& C - \frac{1}{2}\sum_\text{pixels} \bigg( \log (I + \sigma_r^2)  + \frac{(X-I) ^2} { I + \sigma_r^2} \bigg)
+\eeq
+
+\noindent 
+One sees here that the term $\sigma_r^2$ protects the likelihood expression from taking a log of a negative number, which can occur when the background model for $\lambda$ is poorly approximated for e.g. weak pixels values near 0. 
+\end{comment}
+
+\subsection{Modeling the photon gain}
+If we wish to model the photon gain we will need to modify the statistics slightly. Our description of $X$ would become
+\be
+X = \text{gain} \times \text{photons} + \text{readout}
+\ee
+
+where we assume ``gain" is a model parameter. Multiplying the random variable ``photons" by the gain will alter it's statistics such that they are no longer Poissonian (I think). While this approach seems tractable, we will assume the gain is known or measured during the experiment, and leave it out of the analysis hereafter. 
+
+\section{Photon counts model}
+We model the average number of photons scattered into a pixel as
+\beq \label {imodel}
+I_\text{pixel} &=& I_\text{background} + s\,I_\text{Bragg} \nonumber \\ 
+&=& I_\text{background} + s\, r_e^2 \,\kappa \sum_{\text{steps}} J |F_\text{cell}|^2 \,|F_\text{latt}|^2 \Delta \Omega
+\eeq
+where the parameters are summarized in Table (\ref{table:parameters}).
+
+\begin{table}
+\centering
+\begin{tabular}{ |c|c| } 
+ \hline
+ Parameter & Brief description \\
+ \hline
+ \hline
+  $J$ & photon fluence at each wavelength (included in the sum over steps) \\ 
+  \hline
+  $|F_\text{cell}|$ & molecular structure factor amplitude \\
+  \hline
+  $|F_\text{latt}|$ & lattice structure factor amplitude \\
+  \hline
+  $\kappa$ & polarization factor \\
+  \hline
+  $\Delta \Omega$ & solid angle of pixel as seen from the crystal \\
+  \hline
+  $r_e$ & classical electron radius \\   
+ \hline
+ $I_\text{background}$ & photons scattered into pixel by e.g. solvent / air \\
+\hline
+$s$ & quality factor of the crystal; scales with number of scattered photons \\
+\hline
+$\sum_\text{steps}$ & sum over wavelengths, beam divergences, mosaic domains\\
+\hline
+\end{tabular}
+\caption{\label{table:parameters}Intensity model parameter descriptions}
+\end{table}
+
+\subsection{Molecular structure factor}
+\noindent Of particular note in equation (\ref{imodel}), the term $|F_\text{cell}|$ is the molecular structure factor amplitude and is the most important parameter of interest.  The molecular structure factors are the sought after parameters in the vast majority of X-ray crystallography experiments, and there exists many methods of computing electron density maps given a full set of measured $|F_\text{cell}|$; most of these techniques require significant amounts of prior knowledge and are therefore subject to bias.  In general $|F_\text{cell}|$ is dependent on the wavelength $\lambda$ of incident photons. This dependence is strongest in the presence of heavy atoms whose absorption edge is at or near $\lambda$. MAD phasing is a technique which makes use of this dependence in order to determine the electron density map with little or no prior information. We can use the Karle-Hendrickson MAD equations to rewrite our intensity model, and in doing so remove the $\lambda$ dependence from the thousands of structure factors to a much smaller number of values, specifically  the heavy atom complex scattering factor measured at the wavelengths used in the experiment. For the simplest case of having a single heavy atom species in the protein, the Karle-Hendrickson equations reduce to  
+\be \label{equ:karle}
+|F_\text{cell}^{\pm}|^ {\,2} = |F_t|^2 + a (\lambda) |F_S|^2 + b(\lambda) |F_t|\, |F_S| \cos \alpha  \pm c (\lambda) |F_t|\, |F_S| \sin \alpha  + \epsilon
+\ee
+
+where $|F_t|$ is the wavelength independent structure factor of the entire protein unit cell (including the heavy atom),  $|F_S|$ is the wavelength independent structure factor of just the heavy atoms, $\alpha \equiv \alpha^+$ is specifically the phase angle difference between  the complex structure factors $\widetilde F_t^+ = |F_t| \exp (i\phi_{F_t})$ and $\widetilde F_S^+ = |F_S| \exp (i\phi_{F_S})$, 
+\be
+\alpha \equiv \alpha^+ = \phi_{F_t^+} - \phi_{F_S^+}
+\ee
+
+and the three terms $a,b,c$ depend on the complete atomic scattering factor of the heavy atom, including dispersive and anomalous contributions (see equation \ref{lifeconstants}). See section \ref{section:derive} for a derivation of equation (\ref{equ:karle}). The parameters $a(\lambda), b(\lambda), c(\lambda)$ can be refined against data [cite Sauter 2019] or measured separately and treated as known variables. At the very least, they can be estimated from both the Henke and Cromer-Mann tables. Here we assume they are the same for all crystals during a given SFX experiment. 
+
+It is important to clarify that $\alpha=-\alpha^-$ where $\alpha^-$ is the phase angle difference between  $\widetilde F_t^- = |F_t^-| \exp( i \phi_{F_t^-})$ and $\widetilde F_S^-= |F_S^-| \exp( i \phi_{F_S^-})$. This is simply a result of the geometric relationship $\phi_{F_t^+} = - \phi_{F_t^-}$ and $\phi_{F_S^+} = - \phi_{F_S^-}$, which is only true because $\widetilde F_t$ and $\widetilde F_S$ are both wavelength-independent structure factors. The point of this realization is that it reduces the overall number of unknown phase angle differences by a factor of 2. See section (\ref{section:alpha}) for further clarification.  
+
+The error term $\epsilon$ in Eq. (\ref{equ:karle}) arises because even the smaller atoms undergo anomalous scattering, but we assume this error is negligible compared to other sources of experimental error, e.g. shot noise, so long as the heavy atom undergoes significant anomalous scattering (this may not be true for smaller ``heavy" atoms like Sulfur where contributions from other light elements might contribute significant noise [cite Terwilliger, P Adams, Yang]).  
+
+\subsection{Other model parameters}
+The term $\kappa$ is the Kahn polarization term based on the Law of Malus and used to describe the azimuthal and zenithal dependence of the intensity as a function of the incident beam polarization.  The term originally described un-polarized X-ray radiation passing through a monochromator, which polarized the beam along a given axis prior to scattering from the sample. Here, the X-rays incident on the sample are pre-polarized by the XFEL radiation process itself, leading to similar geometrical dependence on the scattered intensity as that observed in [cite Kahn and the other guy from before]
+
+The term $|F_\text{latt}|$ is the lattice structure factor. Hidden in $|F_\text{latt}|$ are the geometries of the experiment, namely 
+
+\begin{itemize}
+\item the crystal rotation (missetting) matrix, $\matr U$, which depends on 3 unknown angles 
+\item the crystal unit cell matrix, $\matr B$, which has at most 6 non-zero elements describing the unit cell dimensions 
+\item  the momentum transfer from incident beam $\vec k_i$ to scattered beam $\vec k$, defined as $\vec q = \frac{1}{\lambda} (\hat k-  \hat{k}_i)$
+\item a dimensionless term that scales with mosaic domain size, $N_\text{mos} = (V_\text{mosaic} / V_\text{ucell})^{1/3}$, 
+\item the crystal texture, representing the discrete aspect of crystal mosaicity. 
+\end{itemize}
+
+Note the scattered beam direction $\hat k$ is always constructed in reference to the point of measurement (pixel) and therefore depends on the precise three-dimensional detector geometry, described in full generality according to the DXTBX definitions.
+
+The term $s$ represents the overall scattering quality of the crystal which correlates with the amount of exposed crystal volume, $\Delta \Omega$ is the solid angle subtended by the pixel as seen from the crystal, and $J$ is the flux of photons at a given wavelength measured during the experiment. The arbitrary ``sum over steps" is a place holder, and in general
+\be \label{equ:steps}
+\sum_\text{steps} = \sum_\lambda \sum_\text{div} \sum_\text{mos} 
+\ee
+
+where ``div" and ``mos" are beam divergence steps and mosaic domains domain steps, respectively.  Here we focus on the $\lambda$ dependence, and neglect the sum of mosaic domains and sum of beam divergences. If the crystals under investigation are very mosaic, our model should compensate by decreasing the mosaic domain size $N_\text{mos}$, thus causing the modeled spots to ``spread out" in reciprocal space. Further, the divergence of the CXI beam used in this experiment is assumed negligible compared to the wavelength dependence. 
+
+Lastly,  $I_\text{background}$ is the local background at the pixel. To determine $I_\text{background}$ we employ the tilt-plane method which provides an analytical solution to a linear equation of 3 parameters describing the two dimensional local background intensity. In general the 3 $I_\text{background}$ parameters can be refined globally for each Bragg reflection being investigated, however here we determine them once and keep them fixed throughout the analysis.
+
+\subsection{Parameter overview}
+The unknown parameters we seek are  $\matr U, \matr B, N_\text{mos}, s, |F_t|, |F_S|, \alpha $, which we collectively call $\Theta $. We will use an indexing program to determine initial estimates for $\matr U, \matr B$ using observed strong spot positions, and these will further be refined against the observed pixel values in our global refinement step. The parameters are defined in two categories: global and local. Local parameters pertain to a given XFEL event, usually called a ``shot", and these include $\matr U, \matr B, N_\text{mos}, s$. The global parameters are then the unknown structure factor amplitudes $|F_t|, |F_S|$ and the phase difference $\alpha$. For the space group P43212, we expect roughly $N_F=\SI{1.5e4}{}$ measured miller indices. Each index is assigned both $|F_t|$ and $|F_S|$, so there are \SI{3e4}{} total unknown structure factor amplitudes. We only need to solve for $N_\alpha = N_F/2 = 7500$ phases (because of the relation $\alpha = \alpha^-$) resulting in a total of \SI{3.75e4}{} global unknown variables. The matrix $\matr B$ for a tetragonal cell contains $N_\text{cell}=2$ unknowns, namely the rectangular dimensions of the crystal unit cell $a_\text{cell}, c_\text{cell}$, making the total number of unknowns per ``shot" $N_\text{local}=7$ (2 unit cell constants, 3 rotation angles, 1 mosaic domain size $N_\text{mos}$, and 1 crystal scale factor, $s$). In order to adequately sample the global parameter space one needs to record many exposures, however each additional exposure adds 7 unknown variables. Fortunately each exposure also includes many measurements of spots, each composed of multiple pixels (unless the spots are sufficiently sharp and/or pixels are large). A modest assumption is that each Bragg reflection provides information for on average $\approx 1.5$ of the 7 unknown local parameters. If we measure \SI{2e4}{} shots, each with at least 20 or more Bragg reflections (a feat regularly accomplished during XFEL experiments) then we can assign $\SI{2e4}{} \times 1.5 \times 20 = \SI{6e5}{}$ measurements for our $\SI{3.75e4}{} + (\SI{2e4}{} )\times 7 = \SI{1.78e5}{}$ unknowns, seemingly over-determining the system. In general some structure factor reflections are more determined than others,  particularly the lower resolution reflections might be harder to sample due to geometrical restrictions, however most of the MAD phasing content should extend from the moderate resolution out to $\approx\SI{3.5}{\angstrom}$. 
+
+\subsection{More on lattice transform}
+We use here a Gaussian lattice model
+\be
+|F_\text{latt}| = N_\text{mos}^3 \exp (-c\,H)
+\ee
+
+where $c$ is a constant chosen to scale the number of photons to the analytical result defined using sinc functions [cite], and $H$ is a positive number whose magnitude  represents the deviation from the perfect Bragg condition.  
+\be
+H = N_\text{mos}^2( (h_f-h)^2 + (k_f-k)^2 + (l_f-l)^2)
+\ee
+
+where the fractional miller index $\vec h_f = (h_f,k_f,l_f)$ is given by
+\be
+\vec h_f = \matr U\cdot  \matr B \cdot \vec q^{\,\,T}
+\ee
+
+\section{``a posteriori" probability, given pixel values}
+\subsection{Maximum a posteriori estimation}
+We model our data using Bayesian statistics. Notably, we will not be summing pixel values together which is typically done during data reduction. Here we choose to use the pixel variation within and around the Bragg reflection in order to gather more information with which to restrain our model parameters $\Theta$. Specifically our goal is to find the maximum a posteriori (MAP) estimate $\Theta_\text{MAP}$ given a set of experimental observations, namely all of the pixel measurements $X$ at or in the vicinity of the Bragg reflections throughout the experiment. In doing so it is our hope that the Karle-Hendrickson parameters $|F_t|, |F_S|, \alpha$ are refined and can be used to directly compute phases of the protein, and thus determine its electron density. We seek the solution of the Bayesian probability equation 
+\be \label{MAP}
+\Theta_\text{MAP} = \argmax_{\Theta} {\,f(X_i | \Theta ) \,g( \Theta)}
+\ee 
+where $f(X_i | \Theta )$ represents the likelihood of the dataset given our model and $g(\Theta)$ represents the prior distributions enforcing what is known about the model parameters. The likelihood of the data is the product of the probabilities of each pixel measurement $i$, given the model parameters $\Theta$. Using equation (\ref{sampleX}) we get
+\be
+f(X_i | \Theta) = \prod_i \mathcal {N} \left (\,I_i(\Theta), \sqrt{I_i(\Theta) + (\sigma_r)_i^2} \,\right )
+\ee
+
+The variance of the readout, $(\sigma_r)_i^2$, could be measured per pixel (as written), per detector panel, or have some other description. Here we assume it is easy enough to measure it per pixel. For $g(\Theta)$ we will use the prior on the heavy atom structure factors described in Tom Terwilliger 1994, equation (1) therein,
+\be
+g(|F_S|) \propto |F_S| \exp(-|F_S|^2 \big / |\overbar{F}_S|^2)
+\ee
+
+where the term $|\overbar{F}_S|$ represents the average value of the heavy atom structure factor amplitude  within a reasonably defined resolution shell containing the structure factor in question. Putting this all together, we seek to find the model parameters that maximize the posterior estimate:
+\be \label{thetamap}
+\Theta_\text{MAP} = \argmax_{\Theta} \left(\prod_i  \frac{1}{2\pi\sqrt{I_i(\Theta) + \sigma_r^2}}\, \exp \frac{-(X_i-I_i(\Theta))^2}{2(I_i(\Theta)+\sigma_r^2)}\right) \, \left(\prod_{|F_S|} |F_S| \exp(-|F_S|^2 \big / |\overbar{F}_S|^2)  \right )
+\ee
+
+To solve (\ref{thetamap}) we will use the quasi Newton approach, steered by the Hessian diagonal. Although we can directly compute the full Hessian, we choose to use quasi-Newton as it is generally more robust at finding global extrema. In the absence of readout noise we use the Poissonian-only likelihood, and the MAP estimate is
+\be \label{thetamap2}
+\Theta_\text{MAP} = \argmax_{\Theta}  \left( \prod_i  \frac{\exp (-I_i(\Theta)) \,\, I_i(\Theta)^{X_i}}{X_i!} \right)  \, \left( \prod_{|F_S|} |F_S| \exp \big ( -|F_S|^2 \,\big / \,\,|\overbar{F}_S|^2\,\, \big )  \right)
+\ee
+
+This Poisson-only approach should be valid in photon counting cameras that do not require a dark pedestal subtraction.
+
+\subsection{Numerical approach}
+
+Solving equation (\ref{thetamap}), is equivalent to solving the equation
+\beq \label{logmap2}
+\Theta_\text{MAP} &=& \argmin_{\Theta} \left[ - \ln \big( \,f(X_i|\Theta)  \,g(\Theta )\, \big )  \right ] \\
+&=& \argmin_{\Theta}  \mathcal{F}
+\eeq
+
+where 
+\be
+\mathcal F = \frac{1}{2}\sum_i \bigg (2\ln{2\pi} + \ln(I_i(\Theta)+(\sigma_r)_i^2) +  \big(X_i-I_i(\Theta)\big)^2 \big /\, \big(I_i(\Theta)+(\sigma_r)_i^2\,\big) \bigg) +\,  \sum_{|F_S|}\bigg( \big( |F_S| \big / |\overbar{F}_S| \big) ^2 - \ln |F_S| \bigg)
+\ee
+
+Note, logarithms are typically used in order to maintain numerical accuracy.
+
+In minimizing $\mathcal{F}$ using the quasi Newton approach, it is necessary to construct the gradient with respect to the model parameters $\Theta$. In general, for a given parameter $\theta$, 
+\beq
+\pdv{\mathcal{F}}{\theta} &=& \frac{1}{2}\sum_i  \pdv{I_i(\Theta)}{\theta} \bigg(\frac{1 }{ I_i(\Theta)+(\sigma_r)_i^2} \bigg )\bigg(1-2(X_i-I_i(\Theta)) - \big(X_i-I_i(\Theta)\big)^2 \big /\, \big(I_i(\Theta) + (\sigma_r)_i^2\,\big)  \bigg) \\ \nonumber
+&& \,+\, \sum_{|F_S|} \pdv{|F_S|}{\theta} \bigg( \frac{2|F_S|}{|\overbar{F}_S|^2} - \frac{1}{|F_S|} \bigg)
+\eeq
+
+\begin{comment}
+Solving equation (\ref{thetamap2}), is equivalent to solving the equation
+\beq \label{logmap2}
+\Theta_\text{MAP} &=& \argmin_{\Theta} \left[ - \ln \big( \,f(X|\Theta)  \,g(\Theta )\, \big )  \right ] \\
+&=& \argmin_{\Theta}  \mathcal{F}
+\eeq
+
+where
+\be
+\mathcal F = \sum_\text{pixels} \bigg ( I(\Theta) - X \ln I(\Theta) + \ln X! \bigg) +\,  \sum_{F_S}\bigg( \big( F_S /\overbar{F}_S \big) ^2 - \ln F_S \bigg)
+\ee
+Note, logarithms are typically used in order to maintain numerical accuracy.
+
+In minimizing $\mathcal{F}$ using the quasi Newton approach, it is necessary to construct the gradient with respect to the model parameters $\Theta$. In general, for a given parameter $\theta$, 
+\be
+\pdv{\mathcal{F}}{\theta} = \sum_\text{pixels}  \pdv{I}{\theta} \bigg (1- \frac{X }{ I} \bigg ) + \sum_{F_S} \pdv{F_S}{\theta} \bigg( \frac{2F_S}{\overbar{F}_S^2} - \frac{1}{F_S} \bigg)
+\ee
+\end{comment}
+
+Note $\pdv{|F_S|}{\theta}$ is 0 except when $\theta$ is the heavy atom structure factor amplitude  $|F_S|$, in which case it is equal to 1. 
+
+\subsubsection{Derivative intensity w.r.t. the heavy atom structure factor}
+The derivative of the intensity measured in pixel $i$ w.r.t. the heavy atom structure factor is given by 
+\be
+\pdv{I_i(\Theta)}{|F_S|} = 2 r_e^2 \kappa \sum_\lambda  \left( J |F_\text{cell}| \,\left( \pdv{|F_\text{cell}|}{|F_S|}\right) \,|F_\text{latt}|^2 \Delta\Omega\right)
+\ee
+
+where
+\be
+\pdv{|F_\text{cell}|}{|F_S|} = \frac{2 a(\lambda) |F_S| + b(\lambda) |F_t| \cos \alpha \pm c(\lambda) |F_t| \sin \alpha}{2 |F_\text{cell}|}
+\ee
+
+hence
+\be \label{dHeavy}
+\pdv{I_i(\Theta)}{|F_S|} = r_e^2 \kappa \sum_\lambda   J \big(  2 a(\lambda) |F_S| + b(\lambda) |F_t| \cos \alpha \pm c(\lambda) |F_t| \sin \alpha \big) |F_\text{latt}|^2 \Delta\Omega
+\ee
+
+Note, $\pm$ indicates the hand of the structure factor. Note, the $\sum_\text{steps}$ defined in  equation (\ref{equ:steps}) is limited to only include the sum over wavelengths $\lambda$, which is a decent first approximation to the observed intensity. 
+
+\subsubsection{Derivative intensity w.r.t. the total protein structure factor}
+Similar to equation (\ref{dHeavy}), we find that 
+\be \label{dTotal}
+\pdv{I_i(\Theta)}{|F_t|} = r_e^2 \kappa \sum_\lambda   J \big(  2 |F_t| + b(\lambda) |F_S| \cos \alpha \pm c(\lambda) |F_S| \sin \alpha \big) |F_\text{latt}|^2 \Delta\Omega
+\ee
+
+where $\pm$ indicates the hand of the structure factor
+
+\subsubsection{Derivative of the intensity w.r.t. the protein and heavy atom substructure phase shift} \label{section:derive}
+We find that 
+\be \label{dAlpha}
+\pdv{I_i(\Theta)}{\alpha} = r_e^2 \kappa \sum_\lambda   J |F_t|\, |F_S| \,\big( - b(\lambda) \sin \alpha \pm c(\lambda) \cos \alpha \big) |F_\text{latt}|^2 \Delta\Omega
+\ee
+
+\section{On the Karle-Hendrickson equation}
+\subsection{Derivation}
+We begin here by considering the total structure factor of all atoms in the protein. Lets define the total wavelength-dependent atomic scattering (form) factor for an atom $j$ as 
+\be
+\widetilde f_j (|q|, \lambda) = f_j^o(|q|) +  \widetilde z_j(\lambda)
+\ee
+
+where we define the usual 
+\beq \label{zparts}
+\Re (\widetilde z_j) &=& f_j^{'}(\lambda) \\ \nonumber
+\Im (\widetilde z_j) &=& f_j^{''}(\lambda)
+\eeq 
+
+and where q is the magnitude of the momentum transfer vector. Here, $f^o_j(|q|)$ is the normal scattering factor of the atom, typically parameterized as a sum of 9 Gaussians determined by Cromer and Mann,  and $\widetilde z_j(\lambda)$  is a complex number used to represent the corrections to the atomic scattering factor in the presence of significant absorption. With this we can write the protein structure factor as the sum over atoms in the protein with contributions from there scattering factors
+
+\beq \label{total}
+\widetilde F_{\text{cell}} &=& \sum_j \widetilde f_j(|q|, \lambda) \,\exp (i \vec q \cdot \vec r_j)  \\ \nonumber
+&=&  \sum_j f^o_j(|q|) \,\exp (i \vec q \cdot \vec r_j) + \sum_j  \widetilde z_j(\lambda) \,\exp (i \vec q \cdot \vec r_j)  \\ \nonumber
+&=& \widetilde{F_t} + \sum_j  \widetilde z_j(\lambda) \,\exp (i \vec q \cdot \vec r_j)
+\eeq
+
+In equation (\ref{total}), $\widetilde F_t$ represents the total wavelength independent structure factor of the protein, $\vec q$ is the momentum transfer vector, and $\vec r_j$ is the atomic coordinate of atom $j$ in the unit cell. We can write an expression for the square of the total structure factor
+\be \label{total_squared}
+|F_\text{cell}|^2 =  |F_t|^2 +  |G|^2 + 2 |G| |F_t| \cos \left( \phi_{F_t} - \phi_G \right)
+\ee
+
+where 
+\be
+\widetilde G= \sum_j  \widetilde z_j(\lambda) \,\exp (i \vec q \cdot \vec r_j)
+\ee
+
+and $\phi_{F_t}$ is the phase of the protein structure factor. We can estimate the magnitude and phase of $\widetilde G$ by assuming that the terms $\widetilde z_j(\lambda)$ are only significant for the heaviest atoms in the protein, and specifically when the incident X-rays have wavelength $\lambda$ near the absorption edge of those atom. Noting that $\widetilde z_j$ is constant for each ``species" of heavy atom, we can write
+\be
+\widetilde G = \sum_j  \widetilde z_j(\lambda) \,\exp (i \vec q \cdot \vec r_j) \approx \sum_{S} \widetilde z_S (\lambda ) \sum_{\mathclap{j \in \{S\}}} \exp(i \vec q\cdot \vec r_j) = \sum_S \widetilde z_S (\lambda ) \frac{1}{f_S^o(|q|)} \widetilde F_S
+\ee 
+
+where $S$ refers to each heavy atom species, $\{S\}$ is the substructure of each heavy atom species, and $\widetilde F_S$ is the structure factor of each heavy atom species substructure. In the simplest case of a single heavy atom species present in the protein, we write
+\be
+\widetilde G =  \widetilde z_S (\lambda ) \frac{1}{f_S^o(|q|)} \widetilde F_S
+\ee 
+
+such that 
+\be \label{phaseG}
+\phi_G = \phi_{z_S} + \phi_{F_S}
+\ee
+
+and 
+\be \label{magG}
+|G| = \frac{|z_S(\lambda)|\,\, |F_S|} {f_S^o(|q|)}
+\ee
+
+Substituting (\ref{phaseG}) and (\ref{magG}) into (\ref{total_squared}) we obtain
+\be \label{nearlydone}
+|F_\text{cell}|^2 = |F_t|^2 + \left(\frac{|z_S(\lambda)|^2}{f_S^{o\,2}(|q|)}  \right) |F_S|^2 +\left( \frac{2 |z_S(\lambda)|}{f_S^o(|q|)} \right) |F_t| |F_S| \left( \cos \alpha \,\cos \phi_{z_S} + \sin \alpha \,\sin \phi_{z_S} \right) 
+\ee
+
+where $\alpha= \phi_{F_t} - \phi_{F_S}$ is the phase difference  between the heavy atom substructure and the total protein (which includes the heavy atoms). 
+
+\begin{comment}
+Note, we used the trig identity
+\be
+\cos ( \alpha - \phi_{z_S}) = \cos \alpha \,\cos \phi_{z_S} + \sin \alpha \,\sin \phi_{z_S}
+\ee 
+\end{comment}
+
+Using the common definitions (\ref{zparts}) we can write  
+\be \label{cosphiz}
+\cos \phi_{z_S} = \cos \arctan ( \frac{f ^{''}_S(\lambda)}{ f_S^{'}(\lambda)} ) = \frac{1}{\sqrt{1 + \left( f_S^{''}(\lambda) \big / f_S^{'}(\lambda) \right)^2 }} = \frac{f_S^{'}(\lambda) }{ |z_S(\lambda)|}
+\ee
+
+\be \label{sinphiz}
+\sin \phi_{z_S} = \sin \arctan (\frac{f_S ^{''}(\lambda) }{ f_S^{'}(\lambda)} ) = \frac{(f_S ^{''}(\lambda) \big / f_S^{'}(\lambda) )}{\sqrt{1 + \left( f_S ^{''}(\lambda) \big / f_S^{'} (\lambda)\right)^2 }} = \frac{f_S^{''}(\lambda)}{  |z_S(\lambda)|}
+\ee
+
+and 
+
+\be \label{magz}
+|z_S(\lambda)| = \sqrt{\left(f_S^{'}(\lambda)\right)^2 + \left(f_S^{''}(\lambda)\right)^2} 
+\ee
+
+Substituting equations (\ref{cosphiz}), (\ref{sinphiz}) and (\ref{magz}) into (\ref{nearlydone}) we obtain the Karle Hendrickson equations
+
+\be \label{karlehendricksondefined}
+|F_\text{cell}|^2 = |F_t|^2 + a(|q|, \lambda)\, |F_S|^2 +b(|q|, \lambda) \,|F_t| \,|F_S| \cos \alpha +c(|q|, \lambda)\, |F_t|\,|F_S| \sin \alpha 
+\ee
+
+where
+\beq \label{lifeconstants}
+a(|q|, \lambda) &=& \left(\frac{\left(f_S^{'}(\lambda) \right)^2 + \left(f_S^{''}(\lambda) \right)^2}{f_S^2(q)}  \right) \\ \nonumber
+b(|q|, \lambda) &=& \left( \frac{2 f_S^{'}(\lambda)}{f_S(q)} \right) \\ \nonumber
+c(|q|, \lambda) &=& \left( \frac{2 f_S^{''}(\lambda)}{f_S(q)} \right) 
+\eeq
+
+Note the power in this equation is the isolation of the wavelength dependence, stored in the 3 parameters (\ref{lifeconstants}).  These parameters can be computed from measurements and/or published X-ray data tables and used as constants during an X-ray experiment, and they can be refined against the crystallographic data.
+
+\subsection{On $\alpha$ and $\alpha^-$} \label{section:alpha}
+To see that $\alpha \equiv \alpha^+ = -\alpha^-$ consider that 
+
+\be
+\widetilde F_t^+ = \sum_j f_j^o(|q|) \exp(i \vec q \cdot \vec r) 
+\ee
+
+and hence
+
+\be
+\phi_{F_t^+} = \arctan ( \frac{\sum_j f_j^o(|q|) \sin \vec q \cdot \vec r}{\sum_j f_j^o(|q|) \cos \vec q \cdot \vec r })
+\ee
+
+The act of switching the structure factor hand $h,k,l \rightarrow -h, -k, -l$ implies inverting the momentum transfer vector $\vec q \rightarrow -\vec q$, hence
+
+\beq 
+\phi_{F_t^-} &=& \arctan ( \frac{\sum_j f_j^o(|q|) \sin \left( - \vec q  \cdot \vec r\right)}{\sum_j f_j^o(|q|) \cos  \left( -\vec q \cdot \vec r \right) }) \\ \nonumber
+&=& \arctan ( \frac{- \sum_j f_j^o(|q|) \sin \vec q  \cdot \vec r}{\sum_j f_j^o(|q|) \cos \vec q \cdot \vec r }) \\ \nonumber
+&=& - \phi_{F_t^+}
+\eeq
+
+and similarly for $\phi_{F_S^-}$, therefore
+
+\be
+\alpha \equiv \alpha^+ =  \phi_{F_t^+} - \phi_{F_S^+} = - \phi_{F_t^-} + \phi_{F_S^-} = - \alpha^-
+\ee
+
+\end{document}
