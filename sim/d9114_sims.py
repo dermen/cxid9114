@@ -62,7 +62,6 @@ mos_spread = args.mos_spread_deg
 mos_doms = args.mos_doms
 adc_offset = 0 
 
-
 def main(rank):
 
     device_Id = rank % ngpu_per_node
@@ -112,7 +111,8 @@ def main(rank):
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
     if args.datasf:
         print("Loading 4bs7 structure factors!")
-        data_sf = struct_fact_special.load_4bs7_sf()
+        #data_sf = struct_fact_special.load_4bs7_sf()
+        data_sf = struct_fact_special.load_p9()
         data_sf = [data_sf] + [None]*(len(data_energies)-1)
         
     sad_idx = np.argmin(np.abs(data_energies-8944))

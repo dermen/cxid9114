@@ -10,6 +10,7 @@ from cctbx.array_family import flex
 
 from cxid9114.parameters import ENERGY_CONV
 from cctbx.eltbx import henke, sasaki
+from iotbx.reflection_file_reader import any_reflection_file
 
 
 class Yb_scatter:
@@ -177,7 +178,6 @@ def load_sfall(fname):
     return mil_ar, energies
 
 def load_4bs7_sf():
-    from iotbx.reflection_file_reader import any_reflection_file
     import os
     from cctbx.array_family import flex
     from cctbx import miller
@@ -197,20 +197,25 @@ def load_4bs7_sf():
     for H in diff:
         H_neg = -H[0], -H[1], -H[2]
         # compute Fhkl_minus
-        val_low = vals_anom[H_neg][0] - .5*diff[H][0]
+        val_low = vals_anom[H_neg][0] + diff[H][0]
+
+        val_high = vals_anom[H_neg][0]   # + .5*diff[H][0]
+
+        if val_low <= 0:
+            val_low = .1
+            #from IPython import embed
+            #embed()
+        assert val_high >= 0
 
         vals_anom[H_neg][0] = val_low
-
-        val_high = vals_anom[H_neg][0] + .5*diff[H][0]
         vals_anom[H][0] = val_high
-        if val_low < 0:
-            #res =
-            offset = abs(val_low)
-            vals_anom[H_neg][0] = val_low + offset*2
-            vals_anom[H][0] = val_high + offset*2
+        #if val_low < 0:
+        #    offset = abs(val_low)
+        #    vals_anom[H_neg][0] = val_low + offset*2
+        #    vals_anom[H][0] = val_high + offset*2
         # propagate the error
         vals_anom[H_neg][1] = np.sqrt(vals_anom[H_neg][1]**2 + diff[H][1]**2)
-        vals_anom[H][1] = np.sqrt(vals_anom[H_neg][1] ** 2 + diff[H][1] ** 2)
+        vals_anom[H][1] = np.sqrt(vals_anom[H][1] ** 2 + diff[H][1] ** 2)
 
     hout = tuple(vals_anom.keys())
     mil_idx = flex.miller_index(hout)
@@ -221,6 +226,19 @@ def load_4bs7_sf():
     Fhkl_anom = miller.array( mil_set, data=Fdata, sigmas=Fsigmas).set_observation_type_xray_amplitude()
     
     return Fhkl_anom
+
+
+def load_p9():
+    import os
+    sf_path = os.path.dirname(__file__)
+    sf_file = os.path.join(sf_path, "p9_merged.mtz")
+    miller_arrays = any_reflection_file(
+    	file_name = sf_file).as_miller_arrays()
+    for ma in miller_arrays:
+    
+        print(ma.info().label_string())
+    return miller_arrays[0]
+
 
 if __name__=="__main__":
     main()

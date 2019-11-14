@@ -331,7 +331,9 @@ class BigData:
             SIM.instantiate_diffBragg(default_F=0, oversample=0)
             SIM.D.spot_scale = spot_scale
 
+
             img_in_photons = img / self.gain
+
             print("Rank %d, Starting refinement!" % rank)
             try:
                 RUC = RefineAllMultiPanel(
