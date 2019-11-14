@@ -1,0 +1,116 @@
+
+\documentclass{article}
+\usepackage{amssymb}
+\usepackage{eufrak}
+\usepackage{mathtools}
+\usepackage[font={small,it}]{caption}
+\usepackage{textcomp}
+\usepackage{float}
+\usepackage{physics}
+\usepackage[mathscr]{euscript}
+\usepackage{verbatim}
+\usepackage{setspace}
+\usepackage{comment}
+\usepackage{csquotes}
+\usepackage{siunitx}
+\usepackage{bm}
+\usepackage{subfiles}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{color}
+\usepackage{natbib}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[section]{placeins}
+\usepackage{notoccite}
+\usepackage[margin=0.9in]{geometry}
+
+
+\begin{comment}
+\newif\ifquoteopen
+\catcode`\"=\active % lets you define `"` as a macro
+\DeclareRobustCommand*{"}{%
+   \ifquoteopen
+     \quoteopenfalse ''%
+   \else
+     \quoteopentrue ``%
+   \fi
+}
+\end{comment}
+
+%\makeatletter
+%\AtBeginDocument{%
+ % \expandafter\renewcommand\expandafter\subsection\expandafter{%
+ %   \expandafter\@fb@secFB\subsection
+ % }%
+%}
+
+%\makeatother
+% command aliases
+\newcommand{\matr}[1]{#1}
+%\newcommand{\matr}[1]{\bm{#1}}
+\newcommand{\be}{\begin{equation}}
+\newcommand{\ee}{\end{equation}}
+\newcommand{\overbar}[1]{\mkern 1.5mu\overline{\mkern-1.5mu#1\mkern-1.5mu}\mkern 1.5mu}
+\DeclareMathOperator*{\argmax}{argmax}
+\DeclareMathOperator*{\argmin}{argmin}
+
+\setlength\parindent{0pt}
+
+\def \beq {\begin{eqnarray}} 
+\def \eeq {\end{eqnarray}} 
+
+
+
+% setup
+\doublespacing
+\setcounter{secnumdepth}{5}
+
+
+\definecolor{dkgreen}{rgb}{0,0.6,0}
+\definecolor{gray}{rgb}{0.5,0.5,0.5}
+\definecolor{mauve}{rgb}{0.58,0,0.82}
+
+\lstset{frame=tb,
+  language=Python,
+  aboveskip=3mm,
+  belowskip=3mm,
+  showstringspaces=false,
+  columns=flexible,
+  basicstyle={\small\ttfamily},
+  numbers=none,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue},
+  commentstyle=\color{dkgreen},
+  stringstyle=\color{mauve},
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=3
+}
+
+
+\graphicspath{{./figs/}}
+
+\begin{document}
+\title{Distribs}
+\author{DAM}
+
+\maketitle
+\tableofcontents
+\section{Abstract}
+This document outlines the ideas behind a global MAD refinement of Karle-Hendrickson parameters against pixel measurements.
+
+\section{Notation}
+In this document,
+
+\begin{itemize}
+\item $\widetilde z$ denotes a complex number
+\item $ \vec z$ denotes a vector in 3-space.
+\end{itemize}
+All other ambiguities should be explained in the text 
+
+\subfile{work.tex}
+\bibliographystyle{plain}
+\bibliography{crystallography}
+
+\end{document}

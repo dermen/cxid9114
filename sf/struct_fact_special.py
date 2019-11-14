@@ -1,10 +1,10 @@
-
 import numpy as np
 import h5py
 from scipy.interpolate import interp1d
 
+from scitbx.array_family import flex
+import os
 from iotbx import pdb
-from cctbx.eltbx import henke
 from cctbx import sgtbx, crystal, miller
 from cctbx.array_family import flex
 
@@ -20,7 +20,7 @@ class Yb_scatter:
         if input_file is None:
             input_file = "fp_fdp.npz"
         self.input_file = input_file
-        
+
         if input_file is not None:
             self._load()
 
@@ -39,20 +39,19 @@ class Yb_scatter:
     def fp(self, wavelen_A):
         if not self.loaded:
             return None
-        ev = ENERGY_CONV/wavelen_A
+        ev = ENERGY_CONV / wavelen_A
         return self.fp_I(ev)[()]
 
     def fdp(self, wavelen_A):
         if not self.loaded:
             return None
-        ev = ENERGY_CONV/wavelen_A
+        ev = ENERGY_CONV / wavelen_A
         return self.fdp_I(ev)[()]
-
 
     def fp_tbl(self, wavelen_A=None, ev=None, henke=True):
         if wavelen_A is not None:
-            ev = ENERGY_CONV/wavelen_A
-        kev = ev*1e-3
+            ev = ENERGY_CONV / wavelen_A
+        kev = ev * 1e-3
         if henke:
             factor = self.hen_tbl.at_kev(kev)
         else:
@@ -61,8 +60,8 @@ class Yb_scatter:
 
     def fdp_tbl(self, wavelen_A=None, ev=None, henke=True):
         if wavelen_A is not None:
-            ev = ENERGY_CONV/wavelen_A
-        kev = ev*1e-3
+            ev = ENERGY_CONV / wavelen_A
+        kev = ev * 1e-3
         if henke:
             factor = self.hen_tbl.at_kev(kev)
         else:
@@ -110,18 +109,18 @@ def main():
     sf_path = os.path.dirname(__file__)
     spec_file = os.path.join(sf_path, "../spec/realspec.h5")
     h5 = h5py.File(spec_file, "r")
-    assert("energy_bins" in h5.keys())
+    assert ("energy_bins" in h5.keys())
     en_chans = h5["energy_bins"][()]  # energy channels from spectrometer
-    
+
     output_name = os.path.join(sf_path, "realspec_sfall.h5")  # output file name
-    pdb_name= os.path.join( sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
-    yb_scatter_name = os.path.join( sf_path, "scanned_fp_fdp.npz")  # high res fdp scan and corresponding calculated fp
+    pdb_name = os.path.join(sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
+    yb_scatter_name = os.path.join(sf_path, "scanned_fp_fdp.npz")  # high res fdp scan and corresponding calculated fp
 
     Fout = []
     indices_prev = None  # for sanity check on miller arrays
     for i_en, en in enumerate(en_chans):
         if i_en % 10 == 0:
-            print ("Computing sf for energy channel %d / %d " %( i_en, len(en_chans)))
+            print ("Computing sf for energy channel %d / %d " % (i_en, len(en_chans)))
         wave = ENERGY_CONV / en
         F = sfgen(wave,
                   pdb_name,
@@ -130,25 +129,25 @@ def main():
                   ano_flag=True,
                   yb_scatter_name=yb_scatter_name)
         Fout.append(F.data().as_numpy_array())  # store structure factors in hdf5 format, needs numpy conversion
-        
+
         # put in a sanity check on indices (same for all wavelengths ?)  
         if indices_prev is None:
             indices_prev = F.indices()
             continue
-        assert( all(i == j for i, j in zip(F.indices(), indices_prev)))
+        assert (all(i == j for i, j in zip(F.indices(), indices_prev)))
         indices_prev = F.indices()
 
-    hkl = F.indices()   # at this point, should be same hkl list for all energy channels
+    hkl = F.indices()  # at this point, should be same hkl list for all energy channels
     hkl = np.vstack([hkl[i] for i in range(len(hkl))])
     with h5py.File(output_name, "w") as h5_out:
         h5_out.create_dataset("indices", data=hkl, dtype=np.int, compression="lzf")
         h5_out.create_dataset("data", data=np.vstack(Fout), compression="lzf")
         h5_out.create_dataset("energies", data=en_chans, compression="lzf")
         h5_out.create_dataset("ucell_tuple", data=F.unit_cell().parameters(), compression="lzf")
-        h5_out.create_dataset("hall_symbol", data=F.space_group_info().type().hall_symbol() )
+        h5_out.create_dataset("hall_symbol", data=F.space_group_info().type().hall_symbol())
 
 
-def load_sfall(fname): 
+def load_sfall(fname):
     """
     special script for loading the structure factor file generated in main()
     :param fname: file generated in the main method above.. 
@@ -177,6 +176,7 @@ def load_sfall(fname):
 
     return mil_ar, energies
 
+
 def load_4bs7_sf():
     import os
     from cctbx.array_family import flex
@@ -191,7 +191,6 @@ def load_4bs7_sf():
     Fhkl = reader.build_miller_arrays()["r4bs7sf"]['_refln.F_meas_au_1']
     Fanom = Fhkl.generate_bijvoet_mates()
     Fdiff = reader.build_miller_arrays()['r4bs7sf']['_refln.pdbx_anom_difference_1']
-    
     diff = {h: [val, sig] for h, val, sig in zip(Fdiff.indices(), Fdiff.data(), Fdiff.sigmas())}
     vals_anom = {h: [val, sig] for h, val, sig in zip(Fanom.indices(), Fanom.data(), Fanom.sigmas())}
     for H in diff:
@@ -223,10 +222,9 @@ def load_4bs7_sf():
     mil_set = miller.set(crystal_symmetry=Symm, indices=mil_idx, anomalous_flag=True)
     Fdata = flex.double([vals_anom[h][0] for h in hout])
     Fsigmas = flex.double([vals_anom[h][1] for h in hout])
-    Fhkl_anom = miller.array( mil_set, data=Fdata, sigmas=Fsigmas).set_observation_type_xray_amplitude()
-    
-    return Fhkl_anom
+    Fhkl_anom = miller.array(mil_set, data=Fdata, sigmas=Fsigmas).set_observation_type_xray_amplitude()
 
+    return Fhkl_anom
 
 def load_p9():
     import os
@@ -240,6 +238,54 @@ def load_p9():
     return miller_arrays[0]
 
 
-if __name__=="__main__":
-    main()
 
+def karle_hendrickson_unknowns(d_min=1.5):
+    sf_path = os.path.dirname(__file__)
+
+    pdbname = os.path.join(sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
+    pdbin = pdb.input(pdbname)
+    xr = pdbin.xray_structure_simple()
+    sc = xr.scatterers()
+    sym = [s.element_symbol() for s in sc]
+
+    print "Computing F total"
+    Ft = xr.structure_factors(d_min=d_min,
+                               algorithm='fft',
+                               anomalous_flag=True).f_calc()
+
+    yb_pos = [i for i, s in enumerate(sym) if s == 'Yb']
+    yb_sel = flex.bool(len(sc), False)
+    for pos in yb_pos:
+        yb_sel[pos] = True
+    yb_xr = xr.select(yb_sel)
+    yb_sc = yb_xr.scatterers()
+
+    print "Computing F heavy"
+    Fh = yb_xr.structure_factors(d_min=d_min,
+                               algorithm='fft',
+                               anomalous_flag=True).f_calc()
+
+    Ft_complex = Ft.data().as_numpy_array()
+    Fh_complex = Fh.data().as_numpy_array()
+    Ft_amp = np.abs(Ft_complex)
+    Fh_amp = np.abs(Fh_complex)
+    Fidx = [h for h in Ft.indices()]  # same
+    assert Fidx == [h for h in Fh.indices()]
+    Fidx = np.array(Fidx)
+    positive_hand = np.all(Fidx >= 0, axis=1)
+    phase_diff = np.angle(Ft_complex) - np.angle(Fh_complex)
+    alphas = np.zeros_like(Ft_amp)
+    for i, H in enumerate(Fidx):
+        alpha = phase_diff[i]
+        if not positive_hand[i]:
+            alpha = -alpha
+        alphas[i] = alpha
+    hand = np.ones(len(Ft_amp))
+    hand[~positive_hand] = -1
+
+    return {"Ft": Ft_amp, "Fidx": Fidx, "Fh": Fh_amp, "alpha": alphas, "hand": hand}
+
+
+if __name__ == "__main__":
+    main()
+    #out = karle_hendrickson_unknowns()
