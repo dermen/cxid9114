@@ -15,6 +15,7 @@ except ImportError:
 import argparse
 
 parser = argparse.ArgumentParser("make dadat")
+parser.add_argument("--savenoiseless", action="store_true")
 parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
@@ -121,15 +122,23 @@ data_fluxes_all = h5py.File(spectra_file, "r")["hist_spec"][()] / exposure_s
 #data_fluxes_all = data_fluxes_all[args.startidx:]
 ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
 data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
-if args.sad:
-    print("Rank %d: Loading 4bs7 structure factors!" % rank)
-    data_sf = struct_fact_special.load_4bs7_sf()
-    data_sf = [data_sf] 
-
 from cxid9114.parameters import ENERGY_LOW, WAVELEN_LOW
 if args.sad:
-    data_energies = np.array([ENERGY_LOW])
-BEAM.set_wavelength(WAVELEN_LOW)
+    print("Rank %d: Loading 4bs7 structure factors!" % rank)
+    #_i = np.argmin(np.abs(data_energies - ENERGY_LOW))
+    #data_sf = [data_sf[_i]]
+    # NOTE there is a bug in the load_4bs7_sf code
+
+    data_sf = struct_fact_special.load_p9()
+    #data_sf = struct_fact_special.load_4bs7_sf()
+    data_sf = [data_sf]
+    
+
+if args.sad:
+    #data_energies = np.array([ENERGY_LOW])
+    data_energies = np.array([12660.5])
+
+BEAM.set_wavelength(0.9793)
 
 beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
 
@@ -137,6 +146,8 @@ data_fluxes_worker = np.array_split(data_fluxes_all, size)[rank]
 data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
 a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
 hall = data_sf[0].space_group_info().type().hall_symbol()
+from IPython import embed
+embed()
 
 # Each rank (worker)  gets its own output directory
 odir = args.odir
@@ -317,6 +328,10 @@ for i_data in range(args.num_trials):
 
     if add_noise:
         print("Rank %d: ADDING NOISE" % rank)
+        if args.savenoiseless:
+            np.savez(h5name + ".noiseless.npz",
+                     img=simsDataSum.astype(np.float32),
+                     det=DET.to_dict(), beam=BEAM.to_dict())
         for pidx in range(len(DET)):
             SIM = nanoBragg(detector=DET, beam=BEAM, panel_id=pidx)
             SIM.beamsize_mm = beamsize_mm

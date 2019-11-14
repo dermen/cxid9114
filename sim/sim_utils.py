@@ -9,6 +9,7 @@ import dials.array_family.flex as flex
 from scitbx.matrix import col
 import simtbx.nanoBragg
 nanoBragg = simtbx.nanoBragg.nanoBragg
+#nanoBragg = simtbx.nanoBragg.diffBragg
 shapetype = simtbx.nanoBragg.shapetype
 convention = simtbx.nanoBragg.convention
 
