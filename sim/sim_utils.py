@@ -252,6 +252,8 @@ class PatternFactory:
                 add_water=False, boost=1,
                 add_spots=True, show_params=False):
         if show_params:
+            from IPython import embed
+            embed()
             self.SIM2.show_params()
             #if self.crystal_size_mm is not None:
             print("  Mosaic domain size mm = %.3g" % np.power(self.mosaic_domain_volume, 1/3.))

@@ -3,13 +3,12 @@
 from argparse import ArgumentParser
 from copy import deepcopy
 
-from IPython import embed
-
 parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
-parser.add_argument("--nrank", type=int, default=1)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
+parser.add_argument("--defaultF", type=float, default=1e3)
+parser.add_argument("--sanitycheck", action="store_true")
 parser.add_argument("-o", help='output directoty',  type=str, default='.')
 parser.add_argument("--plot", action="store_true")
 parser.add_argument("--usegt", action="store_true")
@@ -17,6 +16,7 @@ parser.add_argument("--usepredictions", action="store_true")
 parser.add_argument("--show_params", action='store_true')
 parser.add_argument("--forcelambda", type=float, default=None)
 parser.add_argument("--noiseless", action="store_true")
+parser.add_argument("--symbol", default="P43212", type=str)
 args = parser.parse_args()
 
 import numpy as np
@@ -25,6 +25,9 @@ if args.plot:
 import pandas
 from dxtbx.model.experiment_list import ExperimentListFactory
 import h5py
+from cctbx import miller, sgtbx
+from scitbx.array_family import flex
+from cctbx.crystal import symmetry
 
 from cxid9114.sim import sim_utils
 from cxid9114.geom.multi_panel import CSPAD
@@ -92,8 +95,6 @@ writer = h5py.File(os.path.join(odir, "process_rank%d.h5" % rank), "w")
 
 n_processed = 0
 for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
-    #if i_shot < 2235:
-    #    continue
     if i_shot % size != rank:
         continue
     if rank == 0:
@@ -132,7 +133,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     refls_data = utils.open_flex(refl_pkl)
 
     # make a sad spectrum
-    FF = [1e3]  # NOTE: not sure what to do here, we dont know the structure factor
+    # FIXME: set an actualy miller array where the nonzero elements in GT are
+    # set to a constant, that way we stay safe from predicting systematic absences
     FLUX = [total_flux]
 
     # loading the beam  (this might have wrong energy)
@@ -144,9 +146,19 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     energies = [parameters.ENERGY_CONV/ave_wave]
     DET = El.detectors()[0]  # load detector
     crystal = El.crystals()[0]  # load crystal
+
     if args.usegt:  # if true then use the ground truth crystal A matrix for prediction
         crystal.set_A(h5["crystalA"][()])
         DET = deepcopy(CSPAD)   # and use the ground truth CSPAD
+
+    sgi = sgtbx.space_group_info(args.symbol)
+    # TODO: allow override of ucell
+    symm = symmetry(unit_cell=crystal.get_unit_cell(), space_group_info=sgi)
+    miller_set = symm.build_miller_set(anomalous_flag=True, d_min=1.5, d_max=999)
+    Famp = flex.double(np.ones(len(miller_set.indices())) * args.defaultF)
+    mil_ar = miller.array(miller_set=miller_set, data=Famp).set_observation_type_xray_amplitude()
+    FF = [mil_ar]  # NOTE: not sure what to do here, we dont know the structure factor
+
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
     fs_dim, ss_dim = DET[0].get_image_size()
@@ -184,6 +196,33 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
             crystal, delta_q=delta_q, ret_Pvals=True,
             data=img_data, ret_patches=True, refls_data=refls_data, gain=GAIN,
             fc='none', ec='r')  # ret_patches=True, fc='none', ec='w')
+
+        if args.sanitycheck:
+            refl_i_f = refl_pkl.replace("_strong.refl", "_indexed.refl")
+            if not os.path.exists(refl_i_f):
+                raise IOError("Reflection indexed file  %s does not exist!" % refl_i_f)
+            R = utils.open_flex(refl_i_f)
+            Rpp = prediction_utils.refls_by_panelname(R)
+            for pid in Rpp:
+                bb_on_panel = np.array(bboxes)[np.array(bbox_panel_ids) == pid]
+                r_on_panel = Rpp[pid]
+                x, y, _ = prediction_utils.xyz_from_refl(r_on_panel)
+                x = np.array(x)-0.5
+                y = np.array(y)-0.5
+                Hi_on_panel = np.array(Hi)[np.array(bbox_panel_ids) == pid]
+
+                for i_spot, (x1, x2, y1, y2) in enumerate(bb_on_panel):
+                    inX = np.logical_and(x1 < x, x < x2)
+                    inY = np.logical_and(y1 < y, y < y2)
+                    in_bb = inX & inY
+                    if not any(in_bb):
+                        continue
+
+                    pos = np.where(in_bb)[0]
+                    for p in pos:
+                        h_pred_nb = Hi_on_panel[i_spot]
+                        h_pred_stills = r_on_panel[p]["miller_index"]
+                        print "panel:", pid, h_pred_nb, h_pred_stills
     else:
         if not refl_indexed_fnames:
             raise ValueError("Need some refl_indexed_fnames, has size 0")
@@ -236,12 +275,14 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
 
     # load the images
     # TODO determine if direct loading of the image file is faster than using ExperimentList check_format=True
-    raw_data = iset.get_raw_data(0)
-    if isinstance(raw_data, tuple):
-        assert len(raw_data) == len(DET)
-        imgs = [flex_img.as_numpy_array() for flex_img in raw_data]
-    else:
-        imgs = [raw_data.as_numpt_array()]
+    #raw_data = iset.get_raw_data(0)
+    #if isinstance(raw_data, tuple):
+    #    assert len(raw_data) == len(DET)
+    #    imgs = [flex_img.as_numpy_array() for flex_img in raw_data]
+    #else:
+    #    imgs = [raw_data.as_numpt_array()]
+
+    imgs = img_data
     assert all([img.shape == (nslow, nfast) for img in imgs])
 
     # fit the background plane

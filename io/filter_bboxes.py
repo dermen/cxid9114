@@ -20,6 +20,7 @@ if rank == 0:
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
+    parser.add_argument("--gain", type=float, default=28)
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     args = parser.parse_args()
@@ -79,7 +80,7 @@ def get_memory_usage():
 def main():
     # some parameters
     int_radius = 5
-    gain = 28
+    gain = args.gain
     # data is stored in 39 h5py_Files
     resmin = args.reshigh  # high res cutoff
     resmax = args.reslow  # low res cutoff
