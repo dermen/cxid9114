@@ -28,12 +28,20 @@ if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--plot", action='store_true')
+    parser.add_argument("--Ncells_size", default=30, type=float)
+    parser.add_argument("--Nmos", default=1, type=int)
+    parser.add_argument("--mosspread", default=0, type=float)
+    parser.add_argument("--gainval", default=28, type=float)
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
+    parser.add_argument("--noiseless", action="store_true")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--sad", action="store_true")
+    parser.add_argument("--symbol", default="P43212", type=str)
+    parser.add_argument("--bg", action="store_true")
+    parser.add_argument("--p9", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
     parser.add_argument("--poissononly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
@@ -41,7 +49,6 @@ if rank == 0:
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--perimage", action="store_true")
     parser.add_argument('--perturblist', default=None, type=int)
-    #parser.add_argument('--perturblist', nargs='+', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--oversample", default=0, type=int)
@@ -170,8 +177,8 @@ class FatData:
 
     def __init__(self):
         self.int_radius = 5  #
-        self.gain = 28  # gain of panels, can be refined, can be panel dependent
-        self.symbol = "P43212"
+        self.gain = args.gainval  # gain of panels, can be refined, can be panel dependent
+        self.symbol = args.symbol
         self.anomalous_flag = True
         self.flux_min = 1e2  # minimum number of photons to simulate (assume flux is N-photons, e.g. 1 second exposure)
         self.n_ucell_param = 2  # tetragonal cell
@@ -206,11 +213,11 @@ class FatData:
         self.nbcryst = nanoBragg_crystal()
         self.nbcryst.dxtbx_crystal = init_crystal
         self.nbcryst.thick_mm = 0.1
-        self.nbcryst.Ncells_abc = 30, 30, 30
+        self.nbcryst.Ncells_abc = args.Ncells_size, args.Ncells_size, args.Ncells_size
 
         self.nbcryst.miller_array = init_miller_array
-        self.nbcryst.n_mos_domains = 150
-        self.nbcryst.mos_spread_deg = 0.0
+        self.nbcryst.n_mos_domains = args.Nmos
+        self.nbcryst.mos_spread_deg = args.mosspread
 
         # create a nanoBragg beam
         self.nbbeam = nanoBragg_beam()
@@ -226,7 +233,10 @@ class FatData:
         self.SIM.panel_id = 0  # default
         self.SIM.instantiate_diffBragg(default_F=0, oversample=args.oversample)
         if args.sad:
-            self.SIM.D.spot_scale = .7
+            if args.p9:
+                self.SIM.D.spot_scale = 3050
+            else:
+                self.SIM.D.spot_scale = .7
         else:
             self.SIM.D.spot_scale = 12
 
@@ -347,7 +357,12 @@ class FatData:
                 import os
                 npz_path = npz_path.split("d9114_sims/")[1]
                 npz_path = os.path.join("/Users/dermen/", npz_path)
-            img_handle = numpy_load(npz_path)
+            if args.noiseless:
+                noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
+                img_handle = numpy_load(noiseless_path)
+            else:
+                img_handle = numpy_load(npz_path)
+
             img = img_handle["img"]
 
             if len(img.shape) == 2:  # if single panel
@@ -389,7 +404,6 @@ class FatData:
             n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
             is_a_keeper = h["bboxes"]["keepers%d" % shot_idx][()]
-
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
@@ -468,14 +482,19 @@ class FatData:
             # create the sim_data instance that the refiner will use to run diffBragg
             # create a nanoBragg crystal
             if img_num == 0:  # only initialize the simulator after loading the first image
-
                 if args.sad:
-                    from cxid9114.parameters import WAVELEN_LOW
-                    wavelen = WAVELEN_LOW
-                    #flux = 1e12
+                    if args.p9:
+                        wavelen = 0.9793
+                        from cxid9114.sf.struct_fact_special import load_p9
+                        Fhkl_guess = load_p9()
+                    else:
+                        from cxid9114.parameters import WAVELEN_LOW
+                        wavelen = WAVELEN_LOW
+                        from cxid9114.sf.struct_fact_special import load_4bs7_sf
+                        Fhkl_guess = load_4bs7_sf()
+
                     spectrum = [(wavelen, fluxes[0])]
-                    from cxid9114.sf.struct_fact_special import load_4bs7_sf
-                    Fhkl_guess = load_4bs7_sf()
+                    # end if sad
                 self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 
             # map the miller array to ASU
@@ -486,7 +505,7 @@ class FatData:
             #Hi_asu = list(Hi_flex)
 
             # copy the image as photons (NOTE: Dont forget to ditch its references!)
-            img_in_photons = (img/28.).astype('float32')
+            img_in_photons = (img/args.gainval).astype('float32')
 
             # Here, takeout from the image only whats necessary to perform refinement
             # first filter the spot rois so they dont occur exactly at the boundary of the image (inclusive range in nB)
@@ -575,9 +594,13 @@ class FatData:
         n_ncell_param = 1
         n_scale_param = 1
         n_param_per_image = n_rot_param + n_ncell_param + n_scale_param
+
         self.n_param_per_image = n_param_per_image
+
         total_per_image_unknowns = n_param_per_image * n_images
+
         self.n_local_unknowns = total_per_image_unknowns
+
         mem = self._usage()
 
         print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
@@ -690,6 +713,7 @@ class FatData:
         self.RUC.refine_Bmatrix = args.bmatrix
         self.RUC.refine_ncells = args.ncells
         self.RUC.refine_crystal_scale = args.scale
+        self.RUC.refine_background_planes = args.bg
         self.RUC.refine_gain_fac = args.gainrefine
         self.RUC.use_curvatures = False  # args.curvatures
         self.RUC.calc_curvatures = args.curvatures

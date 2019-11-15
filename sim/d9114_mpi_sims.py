@@ -46,6 +46,7 @@ parser.add_argument("-trials", dest='num_trials', help='trials per worker',
                     type=int, default=1)
 parser.add_argument("--optimize-oversample", action='store_true')
 parser.add_argument("--show-params", action='store_true')
+parser.add_argument("--p9", action="store_true")
 parser.add_argument("--kernelspergpu", default=1, type=int, help="how many processes  accessing each gpu")
 parser.add_argument("--oversample", type=int, default=0)
 parser.add_argument("--Ncells", type=float, default=15)
@@ -127,26 +128,26 @@ if args.sad:
     print("Rank %d: Loading 4bs7 structure factors!" % rank)
     #_i = np.argmin(np.abs(data_energies - ENERGY_LOW))
     #data_sf = [data_sf[_i]]
-    # NOTE there is a bug in the load_4bs7_sf code
-
-    data_sf = struct_fact_special.load_p9()
-    #data_sf = struct_fact_special.load_4bs7_sf()
+    if args.p9:
+        data_sf = struct_fact_special.load_p9()
+    else:
+        data_sf = struct_fact_special.load_4bs7_sf()
     data_sf = [data_sf]
     
 
 if args.sad:
-    #data_energies = np.array([ENERGY_LOW])
-    data_energies = np.array([12660.5])
-
-BEAM.set_wavelength(0.9793)
+    if args.p9:
+        data_energies = np.array([12660.5])
+        BEAM.set_wavelength(0.9793)
+    else:
+        data_energies = np.array([ENERGY_LOW])
+        BEAM.set_wavelength(WAVELEN_LOW)
 
 beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
-
 data_fluxes_worker = np.array_split(data_fluxes_all, size)[rank]
 data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
 a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
 hall = data_sf[0].space_group_info().type().hall_symbol()
-
 # Each rank (worker)  gets its own output directory
 odir = args.odir
 odirj = os.path.join(odir, "job%d" % rank)
