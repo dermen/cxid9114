@@ -19,7 +19,7 @@ if rank == 0:
     parser.add_argument("--plot", default=None, type=float)
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
-    parser.add_argument("--snrmin", type=float, default=5, help="minimum SNR for selecting bboxes")
+    parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     args = parser.parse_args()
@@ -83,7 +83,10 @@ def main():
     # data is stored in 39 h5py_Files
     resmin = args.reshigh  # high res cutoff
     resmax = args.reslow  # low res cutoff
-    min_snr = args.snrmin
+    if args.snrmin is None:
+        min_snr = -1
+    else:
+        min_snr = args.snrmin
     fnames = glob(args.glob)
 
     # NOTE: for reference, inside each h5 file there is 
@@ -156,14 +159,18 @@ def main():
             #int_data = [I.integrate_bbox_dirty(bb) for bb in bboxes]
         #else:  # multi-panel img
             # make a dirty integrater for each panel
-        dirties = {pid: Integrator(img_data[pid], int_radius=int_radius, gain=gain)
-                   for pid in set(panel_ids)}
 
-        int_data = [dirties[pid].integrate_bbox_dirty(bb) for pid, bb in zip(panel_ids, bboxes)]
+        if min_snr > 0:
+            dirties = {pid: Integrator(img_data[pid], int_radius=int_radius, gain=gain)
+                       for pid in set(panel_ids)}
 
-        # signal, background, variance  # these are from the paper Leslie '99
-        s, b, var = map(array, zip(*int_data))
-        snr = s / sqrt(var)
+            int_data = [dirties[pid].integrate_bbox_dirty(bb) for pid, bb in zip(panel_ids, bboxes)]
+
+            # signal, background, variance  # these are from the paper Leslie '99
+            s, b, var = map(array, zip(*int_data))
+            snr = s / sqrt(var)
+        else:
+            snr = [12345]*nspots
 
         is_a_keeper = [in_reso_ring[i_spot] and snr[i_spot] > min_snr for i_spot in range(nspots)]
         if rank == 0:

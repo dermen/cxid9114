@@ -3,7 +3,7 @@ import numpy as np
 from cxid9114 import utils
 
 
-def tilting_plane(img, mask=None, zscore=2 ):
+def tilting_plane(img, mask=None, zscore=2):
     """
     fit tilting plane to img data, used for background subtraction of spots
     :param img:  numpy image
@@ -12,7 +12,7 @@ def tilting_plane(img, mask=None, zscore=2 ):
     :param zscore: modified z-score for outlier detection, lower increases number of outliers
     :return: tilting plane, same shape as img
     """
-    Y,X = np.indices( img.shape)
+    Y,X = np.indices(img.shape)
     YY,XX = Y.ravel(), X.ravel()
 
     img1d = img.ravel()
