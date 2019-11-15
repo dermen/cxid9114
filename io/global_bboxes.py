@@ -40,7 +40,8 @@ if rank == 0:
     parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--perimage", action="store_true")
-    parser.add_argument('--perturblist', nargs='+', default=None, type=int)
+    parser.add_argument('--perturblist', default=None, type=int)
+    #parser.add_argument('--perturblist', nargs='+', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--oversample", default=0, type=int)
@@ -208,7 +209,7 @@ class FatData:
         self.nbcryst.Ncells_abc = 30, 30, 30
 
         self.nbcryst.miller_array = init_miller_array
-        self.nbcryst.n_mos_domains = 1
+        self.nbcryst.n_mos_domains = 150
         self.nbcryst.mos_spread_deg = 0.0
 
         # create a nanoBragg beam
@@ -673,7 +674,7 @@ class FatData:
         self.RUC.log_fcells =True
 
         if args.perturblist is not None:
-            self.RUC._hacked_fcells = args.perturblist
+            self.RUC._hacked_fcells = range(args.perturblist)
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False

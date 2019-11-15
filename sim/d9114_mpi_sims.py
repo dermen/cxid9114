@@ -146,8 +146,6 @@ data_fluxes_worker = np.array_split(data_fluxes_all, size)[rank]
 data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
 a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
 hall = data_sf[0].space_group_info().type().hall_symbol()
-from IPython import embed
-embed()
 
 # Each rank (worker)  gets its own output directory
 odir = args.odir

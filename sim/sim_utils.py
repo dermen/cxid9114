@@ -31,7 +31,7 @@ def mosaic_blocks(mos_spread_deg, mos_domains,
     if twister_seed is None:
         twister_seed = 777 
     if random_seed is None:
-        random_seed =  777
+        random_seed = 777
     mersenne_twister = flex.mersenne_twister(seed=twister_seed)
     scitbx.random.set_random_seed(random_seed)
     rand_norm = scitbx.random.normal_distribution(mean=0,
@@ -40,8 +40,8 @@ def mosaic_blocks(mos_spread_deg, mos_domains,
     mosaic_rotation = g(mos_domains)
     for m in mosaic_rotation:
         site = col(mersenne_twister.random_double_point_on_sphere())
-        UMAT_nm.append(site.axis_and_angle_as_r3_rotation_matrix(m, deg=False) )
-        UMAT_nm.append(site.axis_and_angle_as_r3_rotation_matrix(-m, deg=False) )  # NOTE: make symmetric dist
+        UMAT_nm.append(site.axis_and_angle_as_r3_rotation_matrix(m, deg=False))
+        UMAT_nm.append(site.axis_and_angle_as_r3_rotation_matrix(-m, deg=False))  # NOTE: make symmetric dist
     return UMAT_nm
 
 
@@ -345,7 +345,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
         if not only_water:
             PattF.adjust_mosaicity(mos_dom, mos_spread)
         else:
-            PattF.adjust_mosaicity(1,0)
+            PattF.adjust_mosaicity(1, 0)
        
         PattF.adjust_dispersion(disp_pct)
         #PattF.adjust_divergence(div_tup)
