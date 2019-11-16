@@ -593,11 +593,16 @@ class FatData:
         n_rot_param = 3
         n_ncell_param = 1
         n_scale_param = 1
-        n_param_per_image = n_rot_param + n_ncell_param + n_scale_param
-
+        # TODO background refine
+        # NOTE: n_param_per_image is no longer a constant when we refine background planes (unless we do a per-image polynomial fit background plane model)
+        n_param_per_image = [n_rot_param + n_ncell_param + n_scale_param + 3*n_spot_per_image[i]
+                             for i in range(n_images)]
+        #n_param_per_image = n_rot_param + n_ncell_param + n_scale_param
         self.n_param_per_image = n_param_per_image
 
-        total_per_image_unknowns = n_param_per_image * n_images
+        # TODO background refine
+        total_per_image_unknowns = sum(n_param_per_image)  # NOTE background refine
+        #total_per_image_unknowns = n_param_per_image * n_images
 
         self.n_local_unknowns = total_per_image_unknowns
 
@@ -609,6 +614,7 @@ class FatData:
         n_images = comm.reduce(n_images, MPI.SUM, root=0)
         n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
         total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
+        # Gather so that each rank knows how many local unknowns on each rank
         local_unknowns_per_rank = comm.gather(total_per_image_unknowns, root=0)
         mem_tot = comm.reduce(mem, MPI.SUM, root=0)
 
