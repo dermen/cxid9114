@@ -148,6 +148,7 @@ def main():
         nspots = len(bboxes)
 
         # use the known cell to compute the resolution of the spots
+        #FIXME get the hard coded unit cell outta here!
         reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
 
         in_reso_ring = array([resmin < d < resmax for d in reso])
