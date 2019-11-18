@@ -27,6 +27,7 @@ if rank == 0:
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
+    parser.add_argument("--readoutless",action="store_true")
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--Ncells_size", default=30, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
@@ -360,6 +361,13 @@ class FatData:
             if args.noiseless:
                 noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
                 img_handle = numpy_load(noiseless_path)
+            elif args.readoutless:
+                import os
+                #readoutless_path = npz_path.split("tang/")[1]
+                #readoutless_path = os.path.join("/global/project/projectdirs/lcls/dermen/d9114_sims/bear",
+                #                                readoutless_path)
+                readoutless_path = npz_path.replace("tang", "bear")
+                img_handle = numpy_load(readoutless_path)
             else:
                 img_handle = numpy_load(npz_path)
 
