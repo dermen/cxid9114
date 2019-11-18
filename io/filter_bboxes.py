@@ -1,3 +1,5 @@
+#!/usr/bin/env libtbx.python
+
 try:
     from mpi4py import MPI
 
