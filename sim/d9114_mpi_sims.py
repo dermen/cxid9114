@@ -80,7 +80,6 @@ mos_spread = args.mos_spread_deg
 mos_doms = args.mos_doms
 adc_offset = 0
 
-device_Id = rank % ngpu_per_node
 
 import os
 import sys
@@ -169,6 +168,8 @@ for i_data in range(args.num_trials):
         print("Rank %d: skipping- image %s already exists!" \
               % (rank, h5name))
         continue
+
+    device_Id = i_data % ngpu_per_node
 
     print("<><><><><><><")
     print("Rank %d:  trial  %d / %d" % (rank, i_data + 1, args.num_trials))
