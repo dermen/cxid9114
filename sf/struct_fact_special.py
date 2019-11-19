@@ -1,4 +1,6 @@
 import numpy as np
+from cctbx import sgtbx, crystal, miller
+from iotbx import mtz
 import h5py
 from scipy.interpolate import interp1d
 
@@ -226,6 +228,7 @@ def load_4bs7_sf():
 
     return Fhkl_anom
 
+
 def load_p9():
     import os
     sf_path = os.path.dirname(__file__)
@@ -233,10 +236,9 @@ def load_p9():
     miller_arrays = any_reflection_file(
     	file_name = sf_file).as_miller_arrays()
     for ma in miller_arrays:
-    
+
         print(ma.info().label_string())
     return miller_arrays[0]
-
 
 
 def karle_hendrickson_unknowns(d_min=1.5):
@@ -284,6 +286,35 @@ def karle_hendrickson_unknowns(d_min=1.5):
     hand[~positive_hand] = -1
 
     return {"Ft": Ft_amp, "Fidx": Fidx, "Fh": Fh_amp, "alpha": alphas, "hand": hand}
+
+
+
+def make_miller_file(F,SIGF,mil_idx,mtz_name="out.mtz",
+                sym="I4", a=113.949, b=113.949, c=32.474, al=90, be=90, ga=90,
+                wave=.9793, title='P9'):
+
+    sgi = sgtbx.space_group_info(sym)
+    sg = sgtbx.space_group(sgi.type().hall_symbol())
+    Symm = crystal.symmetry(unit_cell=(a,b,c,al,be,ga), space_group=sg)
+
+    mil_set = miller.set(crystal_symmetry=Symm, indices=mil_idx, anomalous_flag=True)
+
+    mil_ar = miller.array(mil_set, data=F, sigmas=SIGF).set_observation_type_xray_amplitude()
+
+    ucell = mil_ar.unit_cell()
+    sgi = mil_ar.space_group_info()
+
+    mtz_handle = mtz.object()
+    mtz_handle.set_title(title=title)
+    mtz_handle.set_space_group_info(space_group_info=sgi)
+
+    mtz_cr = mtz_handle.add_crystal(name="Crystal",
+                                    project_name="project", unit_cell=ucell)
+    dset = mtz_cr.add_dataset(name="dataset", wavelength=wave)
+    _ = dset.add_miller_array(miller_array=mil_ar, column_root_label="Fobs")
+    mtz_handle.show_summary()
+    mtz_handle.write(mtz_name)
+    print("Wrote file")
 
 
 if __name__ == "__main__":
