@@ -133,7 +133,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     refls_data = utils.open_flex(refl_pkl)
 
     # make a sad spectrum
-    # FIXME: set an actualy miller array where the nonzero elements in GT are
+    # FIXME: set an actual miller array where the nonzero elements in GT are
     # set to a constant, that way we stay safe from predicting systematic absences
     FLUX = [total_flux]
 
@@ -164,7 +164,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     fs_dim, ss_dim = DET[0].get_image_size()
     if args.usepredictions:
         beams = []
-        device_Id = rank % n_gpu
+        device_Id = i_shot % n_gpu
         simsAB = sim_utils.sim_colors(
             crystal, DET, BEAM, FF,
             energies,
