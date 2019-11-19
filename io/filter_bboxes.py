@@ -19,6 +19,7 @@ if rank == 0:
     parser = ArgumentParser("options to filter bboxes on each shot",
                             formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument("--plot", default=None, type=float)
+    parser.add_argument("--p9", action="store_true")
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
@@ -151,7 +152,10 @@ def main():
 
         # use the known cell to compute the resolution of the spots
         #FIXME get the hard coded unit cell outta here!
-        reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
+        if args.p9:
+            reso = 1 / sqrt((hi ** 2 + ki ** 2) / 114 / 114 + li ** 2 / 32.5 / 32.5)
+        else:
+            reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
 
         in_reso_ring = array([resmin < d < resmax for d in reso])
 

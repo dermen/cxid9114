@@ -43,6 +43,7 @@ if rank == 0:
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--bg", action="store_true")
     parser.add_argument("--p9", action="store_true")
+    parser.add_argument("--bs7", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
     parser.add_argument("--poissononly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
@@ -236,6 +237,8 @@ class FatData:
         if args.sad:
             if args.p9:
                 self.SIM.D.spot_scale = 3050
+            elif args.bs7:
+                self.SIM.D.spot_scale = 250
             else:
                 self.SIM.D.spot_scale = .7
         else:
@@ -495,6 +498,12 @@ class FatData:
                         wavelen = 0.9793
                         from cxid9114.sf.struct_fact_special import load_p9
                         Fhkl_guess = load_p9()
+                    elif args.bs7:
+                        from cxid9114.parameters import WAVELEN_HIGH
+                        from cxid9114.sf import struct_fact_special
+                        wavelen = WAVELEN_HIGH
+                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", 
+                                        yb_scatter_name="../sf/scanned_fp_fdp.npz")
                     else:
                         from cxid9114.parameters import WAVELEN_LOW
                         wavelen = WAVELEN_LOW
