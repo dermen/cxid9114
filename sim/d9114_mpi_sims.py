@@ -325,7 +325,6 @@ for i_data in range(args.num_trials):
     if add_background:
         print("Rank %d: ADDING BG" % rank)
         # background was made using average flux over all shots, so scale it up/down here
-        bg_scale = data_fluxes.sum() / ave_flux_across_exp
         # TODO consider varying the background level to simultate jet thickness jitter
         if args.cspad:
             simsDataSum += background * bg_scale

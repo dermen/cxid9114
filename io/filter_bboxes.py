@@ -22,6 +22,7 @@ if rank == 0:
     parser.add_argument("--p9", action="store_true")
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
+    parser.add_argument("--tiltfilt", default=None, type=float, help="minimum rms for the tilt plane fit")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
     parser.add_argument("--gain", type=float, default=28)
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
@@ -181,6 +182,10 @@ def main():
             snr = [12345]*nspots
 
         is_a_keeper = [in_reso_ring[i_spot] and snr[i_spot] > min_snr for i_spot in range(nspots)]
+        if args.tiltfilt is not None:
+            tilt_rms = h["tilt_rms"]["shot%d" % shot_idx][()]
+            is_a_keeper = [k and rms < args.tiltfilt for k, rms in zip(is_a_keeper, tilt_rms)]
+
         if rank == 0:
             print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
 
