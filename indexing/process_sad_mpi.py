@@ -10,8 +10,10 @@ parser.add_argument("--pearl", action="store_true")
 parser.add_argument("--sz", default=5, type=int)
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
+parser.add_argument("--Z", type=float, default=2)
 parser.add_argument("--dilate", default=1, type=int)
 parser.add_argument("--defaultF", type=float, default=1e3)
+parser.add_argument("--spline", action="store_true")
 parser.add_argument("--sanitycheck", action="store_true")
 parser.add_argument("--thresh", type=float, default=1e-2)
 parser.add_argument("-o", help='output directoty',  type=str, default='.')
@@ -60,6 +62,7 @@ if rank == 0:
     print(args)
     if args.plot is not None or args.plottilt is not None:
         import pylab as plt
+        from mpl_toolkits.mplot3d import Axes3D
 
 # Load in the reflection tables and experiment lists
 Els = glob.glob(args.glob)
@@ -93,6 +96,7 @@ MPI.COMM_WORLD.Barrier()
 from cxid9114.sf import struct_fact_special
 from cxid9114.parameters import WAVELEN_HIGH
 bs7_mil_ar = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", yb_scatter_name="../sf/scanned_fp_fdp.npz")
+datasf_mil_ar = struct_fact_special.load_4bs7_sf()
 
 assert El_fnames
 if rank == 0:
@@ -100,6 +104,8 @@ if rank == 0:
 all_paths = []
 all_Amats = []
 odir = args.o
+
+background = h5py.File("../sim/boop_cspad.h5", "r")['bigsim_d9114'][()]
 
 writer = h5py.File(os.path.join(odir, "process_rank%d.h5" % rank), "w")
 
@@ -179,6 +185,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     if args.miller is not None:
         if args.miller == "bs7":
             FF = [bs7_mil_ar]
+        if args.miller == "datasf":
+            FF = [datasf_mil_ar]
 
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
@@ -236,12 +244,13 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                 bb_on_panel = np.array(bboxes)[np.array(bbox_panel_ids) == pid]
 
                 if args.plot is not None and rank == 0:
+                    plt.figure(1)
                     plt.gcf().clear()
                     _dat = img_data[pid][img_data[pid] > 0]
                     m = _dat.mean()
                     s = _dat.std()
                     vmin = m-s
-                    vmax = m+2*s
+                    vmax = m+5*s
                     plt.imshow(img_data[pid], vmax=vmax, vmin=vmin, cmap='viridis')
                     nspots = len(bb_on_panel)
                     for i_spot in range(nspots):
@@ -249,6 +258,9 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                         patch = plt.Rectangle(xy=(x1, y1), width=x2 - x1, height=y2 - y1, fc='none', ec='r')
                         plt.gca().add_patch(patch)
                     plt.title("Panel=%d" % pid)
+
+                    # get the ground truth background plane and plot
+
                     plt.draw()
                     plt.pause(args.plot)
 
@@ -357,6 +369,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # fit the background plane
     tilt_abc = []
     successes = []
+    error_in_tilt = []
     for i_bbox, (_i1, _i2, _j1, _j2) in enumerate(bboxes):
         i1 = max(_i1-sz, 0)
         i2 = min(_i2+sz, fs_dim)
@@ -365,6 +378,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         j2 = min(_j2+sz, ss_dim)
         i_panel = bbox_panel_ids[i_bbox]
         shoebox_img = imgs[i_panel][j1:j2, i1:i2] / GAIN  # NOTE: gain is imortant here!
+        bg = background[i_panel][j1:j2, i1:i2]
         # TODO: Consider moving the bg fitting to the instantiation of the Refiner..
         # TODO: ...to protect the case when bg planes are fit to images without gain correction
         shoebox_mask = is_bg_pixel[i_panel, j1:j2, i1:i2]
@@ -375,16 +389,37 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
             tilt, bgmask, coeff, _ = tilting_plane(
                 shoebox_img,
                 mask=shoebox_mask,  # mask specifies which spots are bg pixels...
-                zscore=5)  # zscore is standard M.A.D. score for removing additional zingers from the fit
+                zscore=args.Z,  # zscore is standard M.A.D. score for removing additional zingers from the fit
+                spline=args.spline)
             successes.append(True)
         except:
             successes.append(False)
         # note this fit should be EXACT, linear regression..
         tilt_abc.append((coeff[1], coeff[2], coeff[0]))  # store as fast-scan coeff, slow-scan coeff, offset coeff
+        error_in_tilt.append(np.sqrt(np.mean((tilt-bg)**2)))
+        if rank == 0 and args.debug:
+            print("Bbox %d/%d, error in tilt=%.4f" % (i_bbox, len(bboxes), error_in_tilt[-1]))
+
         if args.plottilt is not None and rank == 0:
             if args.debug:
                 shoebox_img_noiseless = imgs_noiseless[i_panel][j1:j2, i1:i2]
-                plt.gcf().clear()
+
+                Fig2 = plt.figure(2)
+                ax3d = Fig2.add_subplot(111, projection="3d")
+                plt.figure(2)
+                ax3d.clear()
+                YY, XX = np.indices(bg.shape)
+                ax3d.plot_surface(XX, YY, tilt, cmap='gnuplot')
+                ax3d.plot_surface(XX, YY, bg, cmap='cool')
+
+                Fig3 = plt.figure(3)
+                ax3 = Fig3.add_subplot(111, projection="3d")
+                plt.figure(3)
+                ax3.clear()
+                ax3.plot_surface(XX, YY, tilt, cmap='gnuplot')
+                ax3.plot_surface(XX, YY, shoebox_img, cmap='cool')
+
+                plt.figure(1)
                 plt.subplot(131)
                 plt.title("tilt fit")
                 plt.imshow(tilt)
@@ -399,8 +434,10 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                 plt.title("data with dilated mask")
                 plt.imshow(shoebox_img * shoebox_mask)
                 plt.gca().images[0].set_clim(cl)
-                plt.draw()
-                plt.pause(args.plottilt)
+                plt.show()
+                #plt.draw()
+                #plt.pause(args.plottilt)
+
             else:
                 plt.gcf().clear()
                 plt.subplot(121)
@@ -415,9 +452,9 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                 plt.pause(args.plottilt)
 
     assert all(successes)
-    bboxes = [b for i, b in enumerate(bboxes) if successes[i]]
-    Hi = [h for i, h in enumerate(Hi) if successes[i]]
-    bbox_panel_ids = [p for i, p in enumerate(bbox_panel_ids) if successes[i]]
+    #bboxes = [b for i, b in enumerate(bboxes) if successes[i]]
+    #Hi = [h for i, h in enumerate(Hi) if successes[i]]
+    #bbox_panel_ids = [p for i, p in enumerate(bbox_panel_ids) if successes[i]]
 
     if not bboxes:
         continue
@@ -427,6 +464,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         print("Rank0: writing")
     writer.create_dataset("bboxes/shot%d" % n_processed, data=bboxes,  dtype=np.int, compression="lzf" )
     writer.create_dataset("tilt_abc/shot%d" % n_processed, data=tilt_abc,  dtype=np.float32, compression="lzf" )
+    writer.create_dataset("tilt_rms/shot%d" % n_processed, data=error_in_tilt,  dtype=np.float32, compression="lzf" )
     writer.create_dataset("Hi/shot%d" % n_processed, data=Hi, dtype=np.int, compression="lzf")
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
     # add the default peak selection flags (default is all True, so select all peaks for refinement)

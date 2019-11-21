@@ -33,6 +33,7 @@ if rank == 0:
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--gainval", default=28, type=float)
+    parser.add_argument("--curseoftheblackpearl", action="store_true")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--noiseless", action="store_true")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
@@ -74,6 +75,11 @@ if rank == 0:
     parser.add_argument("--perturbfcell", default=None, type=float)
 
     args = parser.parse_args()
+    import os
+    if args.outdir is not None:
+        if not os.path.exists(args.outdir):
+            os.makedirs(args.outdir)
+
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
     from numpy import array, sqrt, percentile
@@ -102,7 +108,6 @@ if rank == 0:
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
-    import os
     sf_path = os.path.dirname(struct_fact_special.__file__)
     sfall_file = os.path.join(sf_path, "realspec_sfall.h5")
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
@@ -273,7 +278,7 @@ class FatData:
                 shot_tuples += fidx_shotidx
 
                 # store the number of usable roi per shot in order to divide shots amongst ranks equally
-                roi_per += [sum(h5s[i_f]["bboxes"]["keepers%d" % i_shot][()])
+                roi_per += [sum(h5s[i_f]["bboxes"]["%s%d" % (args.keeperstag,i_shot)][()])
                             for i_shot in range(Nshots_per_file[i_f])]
 
             from numpy import array_split
@@ -414,7 +419,7 @@ class FatData:
             bbox_dset = h["bboxes"]["shot%d" % shot_idx]
             n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
-            is_a_keeper = h["bboxes"]["keepers%d" % shot_idx][()]
+            is_a_keeper = h["bboxes"]["%s%d" % (args.keeperstag, shot_idx)][()]
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
@@ -711,6 +716,10 @@ class FatData:
 
         # plot things
         self.RUC.debug = args.debug
+        self.RUC.binner_dmax = 999
+        self.RUC.binner_dmin = 2
+        self.RUC.binner_nbin = 10
+
         self.RUC.plot_images = args.plot
         self.RUC.plot_fcell = args.plotfcell
         self.RUC.plot_residuals = args.residual
