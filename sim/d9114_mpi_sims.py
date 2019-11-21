@@ -131,7 +131,9 @@ if args.sad:
     if args.p9:
         data_sf = struct_fact_special.load_p9()
     elif args.bs7:
-        data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, "./4bs7.pdb", yb_scatter_name="../sf/scanned_fp_fdp.npz")
+        data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
+            "./4bs7.pdb", 
+            yb_scatter_name="../sf/scanned_fp_fdp.npz")
     else:
         data_sf = struct_fact_special.load_4bs7_sf()
     data_sf = [data_sf]
@@ -326,6 +328,7 @@ for i_data in range(args.num_trials):
         print("Rank %d: ADDING BG" % rank)
         # background was made using average flux over all shots, so scale it up/down here
         # TODO consider varying the background level to simultate jet thickness jitter
+        bg_scale = data_fluxes.sum() / ave_flux_across_exp
         if args.cspad:
             simsDataSum += background * bg_scale
         else:

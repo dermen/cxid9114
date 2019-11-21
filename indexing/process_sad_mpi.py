@@ -9,6 +9,7 @@ parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
 parser.add_argument("--sz", default=5, type=int)
 parser.add_argument("--debug", action="store_true")
+parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
 parser.add_argument("--Z", type=float, default=2)
 parser.add_argument("--dilate", default=1, type=int)
@@ -260,7 +261,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                     plt.title("Panel=%d" % pid)
 
                     # get the ground truth background plane and plot
-
+                    if args.savefigdir is not None:
+                        plt.savefig(os.path.join(args.savefigdir, "_figure%d.png" % pid))
                     plt.draw()
                     plt.pause(args.plot)
 
@@ -282,6 +284,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                         h_pred_nb = Hi_on_panel[i_spot]
                         h_pred_stills = r_on_panel[p]["miller_index"]
                         print "panel:", pid, h_pred_nb, h_pred_stills
+            if args.savefigdir is not None:
+                exit()
     else:
         if not refl_indexed_fnames:
             raise ValueError("Need some refl_indexed_fnames, has size 0")
