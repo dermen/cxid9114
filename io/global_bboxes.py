@@ -55,6 +55,7 @@ if rank == 0:
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
+    parser.add_argument("--fcellbump", default=0.1, type=float)
     parser.add_argument("--oversample", default=0, type=int)
     parser.add_argument("--hack", action="store_true", help="use the local 6 tester files")
     parser.add_argument("--curvatures", action='store_true')
@@ -729,6 +730,7 @@ class FatData:
         self.RUC.has_pre_cached_roi_data = True
         self.RUC.split_evaluation = False
         self.RUC.trad_conv = True
+        self.RUC.fcell_bump = args.fcellbump
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
         self.RUC.S.D.update_oversample_during_refinement = False
