@@ -287,7 +287,7 @@ class FatData:
             print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
 
             # divide the array into chunks of roughly equal sum (total number of ROI)
-            if args.partition:
+            if args.partition and args.restartfile is None:
                 diff = np.inf
                 roi_per = np.array(roi_per)
                 tstart = time.time()
@@ -297,40 +297,30 @@ class FatData:
                     order = permutation(len(roi_per))
                     res = [sum(a) for a in np.array_split(roi_per[order], size)]
                     new_diff = max(res) - min(res)
+                    t_elapsed = time.time() - tstart
+                    t_remain = args.partitiontime - t_elapsed
                     if new_diff < diff:
                         diff = new_diff
                         best_order = order.copy()
-                        print("Best diff=%d" % diff)
-                    if time.time() - tstart > args.partitiontime:
+                        print("Best diff=%d, Parition time remaining: %.3f seconds" % (diff, t_remain))
+                    if t_elapsed > args.partitiontime:
                         break
                 shot_tuples = [shot_tuples[i] for i in best_order]
 
+            elif args.partition and args.restartfile is not None:
+                print ("Warning: skipping partitioning time to use shot mapping as laid out in restart file dir")
+            else:
+                print ("Proceeding without partitioning")
+
             shots_for_rank = array_split(shot_tuples, size)
-
-            # NOTE: this is a hack for now
-            if args.hack:
-                md = np_load("results_big_proc12.txt.npz")
-                h5f = h5py_File("/Users/dermen/cspadA/agg2/process_rank0.h5", "r")
-                import os
-                all_basename = [os.path.basename(ff).split(".npz")[0] for ff in h5f["h5_path"][()]]
-                good_fnames = md["fnames"]
-
-                shots_for_rank = []
-
-                #good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
-                for fname in good_fnames[:size]:
-                    shot_pos = all_basename.index(fname)
-                    shots_for_rank.append([(0, shot_pos)])
-
-
-                if args.boop:
-                    shots_for_rank = [[]]
-                    good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
-                    for fname in good_fnames:
-                        shot_pos = all_basename.index(fname)
-                        shots_for_rank[0] += [(0, shot_pos)]
-                # NOTE end of hack
-
+            import os # FIXME, I thought I was imported already!
+            if args.outdir is not None:  # save for a fast restart (shot order is important!)
+                np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
+            if args.restartfile is not None:
+                # the directory containing the restart file should have a shots for rank file
+                dirname = os.path.dirname(args.restartfile)
+                print ("Loading shot mapping from dir %s" % dirname)
+                shots_for_rank = np.load(os.path.join(dirname, "shots_for_rank.npy"))
             # close the open h5s..
             for h in h5s:
                 h.close()
