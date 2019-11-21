@@ -40,6 +40,7 @@ if rank == 0:
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
+    parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--bg", action="store_true")
@@ -734,6 +735,7 @@ class FatData:
         self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
+        self.RUC.restart_file = args.restartfile
         self.RUC.has_pre_cached_roi_data = True
         self.RUC.split_evaluation = False
         self.RUC.trad_conv = True
