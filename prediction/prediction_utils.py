@@ -1,5 +1,4 @@
 
-from IPython import embed
 import numpy as np
 from dials.array_family import flex
 from scitbx.matrix import sqr
@@ -119,6 +118,21 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
             bad_pixel_mask = np.ones_like(allspotmask, bool)
         integrated_Hi = []
 
+    panel_masks = {}
+    for pid in range(len(detector)):
+        panel_masks[pid] = None
+
+    for r in refls_at_colors:
+        rpp = refls_by_panelname(r)
+        for panel_id in rpp:
+            fast, slow = detector[panel_id].get_image_size()
+            mask = strong_spot_mask_dials(rpp[panel_id], (slow, fast),
+                                   as_composite=True)
+            if panel_masks[panel_id] is None:
+                panel_masks[panel_id] = mask
+            else:
+                panel_masks[panel_id] = np.logical_or(mask, panel_masks[panel_id])
+
     color_data = {}
     color_data["Q"] = []  # momentum transfer vector
     color_data["H"] = []  # miller index fractional
@@ -128,6 +142,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     color_data["Qmag"] = []  # momentum transfer magnitude
     color_data["panel"] = []  # panel id in detector model
     color_data["Pterms"] = []  # summed Bragg spot intensity
+    color_data["strong_masks"] = []  # strong spot masks
     # assume these are the same for all panels in the detector (it need only be approximate for te purpose here)
     detdist = detector[0].get_distance()
     pixsize = detector[0].get_pixel_size()[0]
@@ -136,8 +151,6 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     for refls, beam in zip(refls_at_colors, beams_of_colors):
         H, Hi, Q = refls_to_hkl(
             refls, detector, beam, crystal,  returnQ=True)
-
-        #embed()
 
         color_data["panel"].append(list(refls['panel']))
         color_data["Pterms"].append(list(refls["intensity.sum.value"]))
@@ -164,6 +177,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     all_spot_Pterms = []  # NOTE this is for the preliminary merging code
     all_spot_Pterms_color_idx = []
     all_kept_Hi = []
+    bbox_masks = []
     for H in unique_indexed_Hi:
         x_com = 0
         y_com = 0
@@ -215,6 +229,8 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         j1 = int(max(y_com - delrad/2., 0))
         j2 = int(min(y_com + delrad/2., ss_dim))
 
+        mask_region = panel_masks[pid][j1:j2, i1:i2]
+        bbox_masks.append(mask_region)
         bboxes.append((i1, i2, j1, j2))   # i is fast scan, j is slow scan
 
         if ret_patches:
@@ -247,7 +263,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
             integrated_Hi.append(Yobs)
 
     #unique_indexed_Hi = set(all_indexed_Hi)
-    return_lst = [all_kept_Hi, bboxes, panel_ids]
+    return_lst = [all_kept_Hi, bboxes, panel_ids, bbox_masks]
 
     assert len(all_kept_Hi) == len(bboxes) == len(panel_ids)
 
@@ -336,3 +352,29 @@ def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids
     refls = pixlst_to_reftbl(iset, pxlst_labs)[0]
 
     return refls
+
+
+def strong_spot_mask_dials(refl_tbl, img_size, as_composite=True):
+    from dials.algorithms.shoebox import MaskCode
+    Nrefl = len( refl_tbl)
+    masks = [ refl_tbl[i]['shoebox'].mask.as_numpy_array()
+              for i in range(Nrefl)]
+    code = MaskCode.Foreground.real
+
+    x1, x2, y1, y2, z1, z2 = zip(*[refl_tbl[i]['shoebox'].bbox
+                                   for i in range(Nrefl)])
+    if not as_composite:
+        spot_masks = []
+    spot_mask = np.zeros(img_size, bool)
+    for i1, i2, j1, j2, M in zip(x1, x2, y1, y2, masks):
+        slcX = slice(i1, i2, 1)
+        slcY = slice(j1, j2, 1)
+        spot_mask[slcY, slcX] = M & code == code
+        if not as_composite:
+            spot_masks.append(spot_mask.copy())
+            spot_mask *= False
+    if as_composite:
+        return spot_mask
+    else:
+        return spot_masks
+

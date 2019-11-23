@@ -19,8 +19,10 @@ if rank == 0:
     parser = ArgumentParser("options to filter bboxes on each shot",
                             formatter_class=ArgumentDefaultsHelpFormatter)
     parser.add_argument("--plot", default=None, type=float)
+    parser.add_argument("--p9", action="store_true")
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
+    parser.add_argument("--tiltfilt", default=None, type=float, help="minimum rms for the tilt plane fit")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
     parser.add_argument("--gain", type=float, default=28)
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
@@ -151,7 +153,10 @@ def main():
 
         # use the known cell to compute the resolution of the spots
         #FIXME get the hard coded unit cell outta here!
-        reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
+        if args.p9:
+            reso = 1 / sqrt((hi ** 2 + ki ** 2) / 114 / 114 + li ** 2 / 32.5 / 32.5)
+        else:
+            reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
 
         in_reso_ring = array([resmin < d < resmax for d in reso])
 
@@ -177,6 +182,10 @@ def main():
             snr = [12345]*nspots
 
         is_a_keeper = [in_reso_ring[i_spot] and snr[i_spot] > min_snr for i_spot in range(nspots)]
+        if args.tiltfilt is not None:
+            tilt_rms = h["tilt_rms"]["shot%d" % shot_idx][()]
+            is_a_keeper = [k and rms < args.tiltfilt for k, rms in zip(is_a_keeper, tilt_rms)]
+
         if rank == 0:
             print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
 

@@ -6,11 +6,21 @@ from copy import deepcopy
 parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
+parser.add_argument("--pearl", action="store_true")
+parser.add_argument("--sz", default=5, type=int)
+parser.add_argument("--debug", action="store_true")
+parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
+parser.add_argument("--Z", type=float, default=2)
+parser.add_argument("--dilate", default=1, type=int)
 parser.add_argument("--defaultF", type=float, default=1e3)
+parser.add_argument("--spline", action="store_true")
 parser.add_argument("--sanitycheck", action="store_true")
+parser.add_argument("--thresh", type=float, default=1e-2)
 parser.add_argument("-o", help='output directoty',  type=str, default='.')
-parser.add_argument("--plot", action="store_true")
+parser.add_argument("--miller", type=str, default=None, choices=["bs7", "p9", "datasf"])
+parser.add_argument("--plot", default=None, type=float )
+parser.add_argument("--plottilt", default=None, type=float )
 parser.add_argument("--usegt", action="store_true")
 parser.add_argument("--usepredictions", action="store_true")
 parser.add_argument("--show_params", action='store_true')
@@ -20,9 +30,6 @@ parser.add_argument("--symbol", default="P43212", type=str)
 args = parser.parse_args()
 
 import numpy as np
-if args.plot:
-    import pylab as plt
-import pandas
 from dxtbx.model.experiment_list import ExperimentListFactory
 import h5py
 from cctbx import miller, sgtbx
@@ -31,7 +38,6 @@ from cctbx.crystal import symmetry
 
 from cxid9114.sim import sim_utils
 from cxid9114.geom.multi_panel import CSPAD
-
 
 from cxid9114 import parameters, utils
 from cxid9114.prediction import prediction_utils
@@ -55,6 +61,9 @@ except ImportError:
 
 if rank == 0:
     print(args)
+    if args.plot is not None or args.plottilt is not None:
+        import pylab as plt
+        from mpl_toolkits.mplot3d import Axes3D
 
 # Load in the reflection tables and experiment lists
 Els = glob.glob(args.glob)
@@ -77,12 +86,18 @@ GAIN = 28
 if args.noiseless:
     GAIN = 1
 delta_q = 0.0475
-sz = 5  # expand for fittin background plane
+sz = args.sz  # expand for fittin background plane
 
 if not os.path.exists(args.o) and rank == 0:
     os.makedirs(args.o)
 
 MPI.COMM_WORLD.Barrier()
+
+# load the bs7 default array
+from cxid9114.sf import struct_fact_special
+from cxid9114.parameters import WAVELEN_HIGH
+bs7_mil_ar = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", yb_scatter_name="../sf/scanned_fp_fdp.npz")
+datasf_mil_ar = struct_fact_special.load_4bs7_sf()
 
 assert El_fnames
 if rank == 0:
@@ -90,6 +105,8 @@ if rank == 0:
 all_paths = []
 all_Amats = []
 odir = args.o
+
+background = h5py.File("../sim/boop_cspad.h5", "r")['bigsim_d9114'][()]
 
 writer = h5py.File(os.path.join(odir, "process_rank%d.h5" % rank), "w")
 
@@ -109,14 +126,21 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     h5 = h5py.File(fpath.replace(".npz", ""), 'r')
 
     # get image pixels
+    if args.pearl:  # debugs
+        _fpath = fpath.replace("swirl", "pearl")
+    else:
+        _fpath = fpath
+    noiseless_fpath = _fpath.replace(".npz", ".noiseless.npz")
+
+    if args.debug:
+        assert os.path.exists(noiseless_fpath)
+        imgs_noiseless = np.load(noiseless_fpath)["img"]
     if args.noiseless:
         # load the image that has no noise
-        noiseless_fpath = fpath.replace(".npz", ".noiseless.npz")
         assert os.path.exists(noiseless_fpath)
         img_data = np.load(noiseless_fpath)["img"]
     else:
-        img_data = np.load(fpath)["img"]
-
+        img_data = np.load(_fpath)["img"]
     # get simulation parameters
     mos_spread = h5["mos_spread"][()]
     Ncells_abc = tuple(h5["Ncells_abc"][()])
@@ -133,7 +157,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     refls_data = utils.open_flex(refl_pkl)
 
     # make a sad spectrum
-    # FIXME: set an actualy miller array where the nonzero elements in GT are
+    # FIXME: set an actual miller array where the nonzero elements in GT are
     # set to a constant, that way we stay safe from predicting systematic absences
     FLUX = [total_flux]
 
@@ -155,16 +179,22 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # TODO: allow override of ucell
     symm = symmetry(unit_cell=crystal.get_unit_cell(), space_group_info=sgi)
     miller_set = symm.build_miller_set(anomalous_flag=True, d_min=1.5, d_max=999)
+    # NOTE does build_miller_set automatically expand to p1 ?
+    # consider predicting with the ground truth here for a control
     Famp = flex.double(np.ones(len(miller_set.indices())) * args.defaultF)
     mil_ar = miller.array(miller_set=miller_set, data=Famp).set_observation_type_xray_amplitude()
-    FF = [mil_ar]  # NOTE: not sure what to do here, we dont know the structure factor
+    if args.miller is not None:
+        if args.miller == "bs7":
+            FF = [bs7_mil_ar]
+        if args.miller == "datasf":
+            FF = [datasf_mil_ar]
 
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
     fs_dim, ss_dim = DET[0].get_image_size()
     if args.usepredictions:
         beams = []
-        device_Id = rank % n_gpu
+        device_Id = i_shot % n_gpu
         simsAB = sim_utils.sim_colors(
             crystal, DET, BEAM, FF,
             energies,
@@ -180,7 +210,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
             beam.set_wavelength(parameters.ENERGY_CONV/en)
             try:
                 # NOTE: this is a multi panel refl table
-                R = prediction_utils.refls_from_sims(simsAB[i_en], DET, beam, thresh=1e-2)
+                R = prediction_utils.refls_from_sims(simsAB[i_en], DET, beam, thresh=args.thresh)
             except:
                 continue
             refls_at_colors.append(R)
@@ -190,12 +220,20 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
             continue
 
         # this gets the integration shoeboxes, not to be confused with strong spot bound boxes
-        Hi, bboxes, bbox_panel_ids, patches, Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
+        Hi, bboxes, bbox_panel_ids, bbox_masks, patches, Pterms, Pterms_idx, integrated_Hi = prediction_utils.get_prediction_boxes(
             refls_at_colors,
             DET, beams,
             crystal, delta_q=delta_q, ret_Pvals=True,
             data=img_data, ret_patches=True, refls_data=refls_data, gain=GAIN,
             fc='none', ec='r')  # ret_patches=True, fc='none', ec='w')
+
+        # dilate masks
+        dilate_factor = args.dilate
+        bbox_masks_dilated = []
+        from scipy.ndimage.morphology import binary_dilation
+        for mask in bbox_masks:
+            bbox_masks_dilated.append(
+                binary_dilation(mask, iterations=dilate_factor))
 
         if args.sanitycheck:
             refl_i_f = refl_pkl.replace("_strong.refl", "_indexed.refl")
@@ -205,6 +243,29 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
             Rpp = prediction_utils.refls_by_panelname(R)
             for pid in Rpp:
                 bb_on_panel = np.array(bboxes)[np.array(bbox_panel_ids) == pid]
+
+                if args.plot is not None and rank == 0:
+                    plt.figure(1)
+                    plt.gcf().clear()
+                    _dat = img_data[pid][img_data[pid] > 0]
+                    m = _dat.mean()
+                    s = _dat.std()
+                    vmin = m-s
+                    vmax = m+5*s
+                    plt.imshow(img_data[pid], vmax=vmax, vmin=vmin, cmap='viridis')
+                    nspots = len(bb_on_panel)
+                    for i_spot in range(nspots):
+                        x1, x2, y1, y2 = bb_on_panel[i_spot]
+                        patch = plt.Rectangle(xy=(x1, y1), width=x2 - x1, height=y2 - y1, fc='none', ec='r')
+                        plt.gca().add_patch(patch)
+                    plt.title("Panel=%d" % pid)
+
+                    # get the ground truth background plane and plot
+                    if args.savefigdir is not None:
+                        plt.savefig(os.path.join(args.savefigdir, "_figure%d.png" % pid))
+                    plt.draw()
+                    plt.pause(args.plot)
+
                 r_on_panel = Rpp[pid]
                 x, y, _ = prediction_utils.xyz_from_refl(r_on_panel)
                 x = np.array(x)-0.5
@@ -223,6 +284,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
                         h_pred_nb = Hi_on_panel[i_spot]
                         h_pred_stills = r_on_panel[p]["miller_index"]
                         print "panel:", pid, h_pred_nb, h_pred_stills
+            if args.savefigdir is not None:
+                exit()
     else:
         if not refl_indexed_fnames:
             raise ValueError("Need some refl_indexed_fnames, has size 0")
@@ -259,19 +322,41 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         else:
             exit()
 
-    # TODO per panel strong spot mask
-    # dxtbx detector size is (fast scan x slow scan)
+    # In addition to the integration mask, make a secondary mask of all strong spots
+
     nfast, nslow = DET[0].get_image_size()
     img_shape = nslow, nfast  # numpy format
     n_panels = len(DET)
     is_bg_pixel = np.ones((n_panels, nslow, nfast), bool)
-    strong_panel_ids = refls_data["panel"]
+    refls_data_perpan = prediction_utils.refls_by_panelname(refls_data)
+    for panel_id in refls_data_perpan:
+        fast, slow = DET[panel_id].get_image_size()
+        mask = prediction_utils.strong_spot_mask_dials(
+            refls_data_perpan[panel_id], (slow, fast),
+            as_composite=True)
+        mask = binary_dilation(mask, iterations=args.dilate)
+        is_bg_pixel[panel_id] = ~mask
+
+    if args.usepredictions:
+        for i_bbox, (i1, i2, j1, j2) in enumerate(bboxes):
+            integration_mask = bbox_masks_dilated[i_bbox]
+            pid = bbox_panel_ids[i_bbox]
+            bg = is_bg_pixel[pid, j1:j2, i1:i2]
+            is_bg_pixel[pid, j1:j2, i1:i2] = ~np.logical_or(~bg, integration_mask)
+
+    # TODO per panel strong spot mask
+    # dxtbx detector size is (fast scan x slow scan)
+    #nfast, nslow = DET[0].get_image_size()
+    #img_shape = nslow, nfast  # numpy format
+    #n_panels = len(DET)
+    #is_bg_pixel = np.ones((n_panels, nslow, nfast), bool)
+    #strong_panel_ids = refls_data["panel"]
     # mask the strong spots so they dont go into tilt plane fits
-    for i_refl, (x1, x2, y1, y2, _, _) in enumerate(refls_data['bbox']):
-        i_panel = strong_panel_ids[i_refl]
-        bb_ss = slice(y1, y2, 1)
-        bb_fs = slice(x1, x2, 1)
-        is_bg_pixel[i_panel, bb_ss, bb_fs] = False
+    #for i_refl, (x1, x2, y1, y2, _, _) in enumerate(refls_data['bbox']):
+    #    i_panel = strong_panel_ids[i_refl]
+    #    bb_ss = slice(y1, y2, 1)
+    #    bb_fs = slice(x1, x2, 1)
+    #    is_bg_pixel[i_panel, bb_ss, bb_fs] = False
 
     # load the images
     # TODO determine if direct loading of the image file is faster than using ExperimentList check_format=True
@@ -288,6 +373,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # fit the background plane
     tilt_abc = []
     successes = []
+    error_in_tilt = []
     for i_bbox, (_i1, _i2, _j1, _j2) in enumerate(bboxes):
         i1 = max(_i1-sz, 0)
         i2 = min(_i2+sz, fs_dim)
@@ -296,24 +382,83 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         j2 = min(_j2+sz, ss_dim)
         i_panel = bbox_panel_ids[i_bbox]
         shoebox_img = imgs[i_panel][j1:j2, i1:i2] / GAIN  # NOTE: gain is imortant here!
+        bg = background[i_panel][j1:j2, i1:i2]
         # TODO: Consider moving the bg fitting to the instantiation of the Refiner..
         # TODO: ...to protect the case when bg planes are fit to images without gain correction
         shoebox_mask = is_bg_pixel[i_panel, j1:j2, i1:i2]
+        #shoebox_mask2 = np.ones_like(shoebox_mask)
+        #shoebox_mask2[sz:-sz, sz:-sz] = ~bbox_masks_dilated[i_bbox]
+        #shoebox_mask_total = ~np.logical_or(~shoebox_mask2, ~shoebox_mask)
         try:
             tilt, bgmask, coeff, _ = tilting_plane(
                 shoebox_img,
                 mask=shoebox_mask,  # mask specifies which spots are bg pixels...
-                zscore=2)  # zscore is standard M.A.D. score for removing additional zingers from the fit
+                zscore=args.Z,  # zscore is standard M.A.D. score for removing additional zingers from the fit
+                spline=args.spline)
             successes.append(True)
         except:
             successes.append(False)
         # note this fit should be EXACT, linear regression..
         tilt_abc.append((coeff[1], coeff[2], coeff[0]))  # store as fast-scan coeff, slow-scan coeff, offset coeff
+        error_in_tilt.append(np.sqrt(np.mean((tilt-bg)**2)))
+        if rank == 0 and args.debug:
+            print("Bbox %d/%d, error in tilt=%.4f" % (i_bbox, len(bboxes), error_in_tilt[-1]))
+
+        if args.plottilt is not None and rank == 0:
+            if args.debug:
+                shoebox_img_noiseless = imgs_noiseless[i_panel][j1:j2, i1:i2]
+
+                Fig2 = plt.figure(2)
+                ax3d = Fig2.add_subplot(111, projection="3d")
+                plt.figure(2)
+                ax3d.clear()
+                YY, XX = np.indices(bg.shape)
+                ax3d.plot_surface(XX, YY, tilt, cmap='gnuplot')
+                ax3d.plot_surface(XX, YY, bg, cmap='cool')
+
+                Fig3 = plt.figure(3)
+                ax3 = Fig3.add_subplot(111, projection="3d")
+                plt.figure(3)
+                ax3.clear()
+                ax3.plot_surface(XX, YY, tilt, cmap='gnuplot')
+                ax3.plot_surface(XX, YY, shoebox_img, cmap='cool')
+
+                plt.figure(1)
+                plt.subplot(131)
+                plt.title("tilt fit")
+                plt.imshow(tilt)
+                cl = plt.gca().images[0].get_clim()
+
+                plt.subplot(132)
+                plt.title("noiseless data")
+                plt.imshow(shoebox_img_noiseless * shoebox_mask)
+                plt.gca().images[0].set_clim(cl)
+
+                plt.subplot(133)
+                plt.title("data with dilated mask")
+                plt.imshow(shoebox_img * shoebox_mask)
+                plt.gca().images[0].set_clim(cl)
+                plt.show()
+                #plt.draw()
+                #plt.pause(args.plottilt)
+
+            else:
+                plt.gcf().clear()
+                plt.subplot(121)
+                plt.imshow(tilt)
+                plt.title("tilt fit")
+                cl = plt.gca().images[0].get_clim()
+                plt.subplot(122)
+                plt.imshow(shoebox_img*shoebox_mask)
+                plt.gca().images[0].set_clim(cl)
+                plt.draw()
+                plt.title("data with dilated mask")
+                plt.pause(args.plottilt)
 
     assert all(successes)
-    bboxes = [b for i, b in enumerate(bboxes) if successes[i]]
-    Hi = [h for i, h in enumerate(Hi) if successes[i]]
-    bbox_panel_ids = [p for i, p in enumerate(bbox_panel_ids) if successes[i]]
+    #bboxes = [b for i, b in enumerate(bboxes) if successes[i]]
+    #Hi = [h for i, h in enumerate(Hi) if successes[i]]
+    #bbox_panel_ids = [p for i, p in enumerate(bbox_panel_ids) if successes[i]]
 
     if not bboxes:
         continue
@@ -323,6 +468,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         print("Rank0: writing")
     writer.create_dataset("bboxes/shot%d" % n_processed, data=bboxes,  dtype=np.int, compression="lzf" )
     writer.create_dataset("tilt_abc/shot%d" % n_processed, data=tilt_abc,  dtype=np.float32, compression="lzf" )
+    writer.create_dataset("tilt_rms/shot%d" % n_processed, data=error_in_tilt,  dtype=np.float32, compression="lzf" )
     writer.create_dataset("Hi/shot%d" % n_processed, data=Hi, dtype=np.int, compression="lzf")
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
     # add the default peak selection flags (default is all True, so select all peaks for refinement)

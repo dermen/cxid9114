@@ -33,16 +33,19 @@ if rank == 0:
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--gainval", default=28, type=float)
+    parser.add_argument("--curseoftheblackpearl", action="store_true")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--noiseless", action="store_true")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
+    parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--bg", action="store_true")
     parser.add_argument("--p9", action="store_true")
+    parser.add_argument("--bs7", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
     parser.add_argument("--poissononly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
@@ -52,6 +55,7 @@ if rank == 0:
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
+    parser.add_argument("--fcellbump", default=0.1, type=float)
     parser.add_argument("--oversample", default=0, type=int)
     parser.add_argument("--hack", action="store_true", help="use the local 6 tester files")
     parser.add_argument("--curvatures", action='store_true')
@@ -73,6 +77,11 @@ if rank == 0:
     parser.add_argument("--perturbfcell", default=None, type=float)
 
     args = parser.parse_args()
+    import os
+    if args.outdir is not None:
+        if not os.path.exists(args.outdir):
+            os.makedirs(args.outdir)
+
     from h5py import File as h5py_File
     from cxid9114.integrate.integrate_utils import Integrator
     from numpy import array, sqrt, percentile
@@ -101,7 +110,6 @@ if rank == 0:
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
-    import os
     sf_path = os.path.dirname(struct_fact_special.__file__)
     sfall_file = os.path.join(sf_path, "realspec_sfall.h5")
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
@@ -236,6 +244,8 @@ class FatData:
         if args.sad:
             if args.p9:
                 self.SIM.D.spot_scale = 3050
+            elif args.bs7:
+                self.SIM.D.spot_scale = 250
             else:
                 self.SIM.D.spot_scale = .7
         else:
@@ -270,7 +280,7 @@ class FatData:
                 shot_tuples += fidx_shotidx
 
                 # store the number of usable roi per shot in order to divide shots amongst ranks equally
-                roi_per += [sum(h5s[i_f]["bboxes"]["keepers%d" % i_shot][()])
+                roi_per += [sum(h5s[i_f]["bboxes"]["%s%d" % (args.keeperstag,i_shot)][()])
                             for i_shot in range(Nshots_per_file[i_f])]
 
             from numpy import array_split
@@ -278,7 +288,7 @@ class FatData:
             print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
 
             # divide the array into chunks of roughly equal sum (total number of ROI)
-            if args.partition:
+            if args.partition and args.restartfile is None:
                 diff = np.inf
                 roi_per = np.array(roi_per)
                 tstart = time.time()
@@ -288,40 +298,30 @@ class FatData:
                     order = permutation(len(roi_per))
                     res = [sum(a) for a in np.array_split(roi_per[order], size)]
                     new_diff = max(res) - min(res)
+                    t_elapsed = time.time() - tstart
+                    t_remain = args.partitiontime - t_elapsed
                     if new_diff < diff:
                         diff = new_diff
                         best_order = order.copy()
-                        print("Best diff=%d" % diff)
-                    if time.time() - tstart > args.partitiontime:
+                        print("Best diff=%d, Parition time remaining: %.3f seconds" % (diff, t_remain))
+                    if t_elapsed > args.partitiontime:
                         break
                 shot_tuples = [shot_tuples[i] for i in best_order]
 
+            elif args.partition and args.restartfile is not None:
+                print ("Warning: skipping partitioning time to use shot mapping as laid out in restart file dir")
+            else:
+                print ("Proceeding without partitioning")
+
             shots_for_rank = array_split(shot_tuples, size)
-
-            # NOTE: this is a hack for now
-            if args.hack:
-                md = np_load("results_big_proc12.txt.npz")
-                h5f = h5py_File("/Users/dermen/cspadA/agg2/process_rank0.h5", "r")
-                import os
-                all_basename = [os.path.basename(ff).split(".npz")[0] for ff in h5f["h5_path"][()]]
-                good_fnames = md["fnames"]
-
-                shots_for_rank = []
-
-                #good_fnames = [good_fnames[i] for i in [3, 1, 0, 3, 4,5]]
-                for fname in good_fnames[:size]:
-                    shot_pos = all_basename.index(fname)
-                    shots_for_rank.append([(0, shot_pos)])
-
-
-                if args.boop:
-                    shots_for_rank = [[]]
-                    good_fnames = [good_fnames[args.boopi]]  #, good_fnames[0] ] + list(good_fnames[2:])
-                    for fname in good_fnames:
-                        shot_pos = all_basename.index(fname)
-                        shots_for_rank[0] += [(0, shot_pos)]
-                # NOTE end of hack
-
+            import os # FIXME, I thought I was imported already!
+            if args.outdir is not None:  # save for a fast restart (shot order is important!)
+                np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
+            if args.restartfile is not None:
+                # the directory containing the restart file should have a shots for rank file
+                dirname = os.path.dirname(args.restartfile)
+                print ("Loading shot mapping from dir %s" % dirname)
+                shots_for_rank = np.load(os.path.join(dirname, "shots_for_rank.npy"))
             # close the open h5s..
             for h in h5s:
                 h.close()
@@ -411,7 +411,7 @@ class FatData:
             bbox_dset = h["bboxes"]["shot%d" % shot_idx]
             n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
-            is_a_keeper = h["bboxes"]["keepers%d" % shot_idx][()]
+            is_a_keeper = h["bboxes"]["%s%d" % (args.keeperstag, shot_idx)][()]
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
@@ -495,6 +495,12 @@ class FatData:
                         wavelen = 0.9793
                         from cxid9114.sf.struct_fact_special import load_p9
                         Fhkl_guess = load_p9()
+                    elif args.bs7:
+                        from cxid9114.parameters import WAVELEN_HIGH
+                        from cxid9114.sf import struct_fact_special
+                        wavelen = WAVELEN_HIGH
+                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", 
+                                        yb_scatter_name="../sf/scanned_fp_fdp.npz")
                     else:
                         from cxid9114.parameters import WAVELEN_LOW
                         wavelen = WAVELEN_LOW
@@ -702,6 +708,10 @@ class FatData:
 
         # plot things
         self.RUC.debug = args.debug
+        self.RUC.binner_dmax = 999
+        self.RUC.binner_dmin = 2
+        self.RUC.binner_nbin = 10
+
         self.RUC.plot_images = args.plot
         self.RUC.plot_fcell = args.plotfcell
         self.RUC.plot_residuals = args.residual
@@ -716,9 +726,11 @@ class FatData:
         self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
+        self.RUC.restart_file = args.restartfile
         self.RUC.has_pre_cached_roi_data = True
         self.RUC.split_evaluation = False
         self.RUC.trad_conv = True
+        self.RUC.fcell_bump = args.fcellbump
         self.RUC.refine_detdist = False
         self.RUC.refine_background_planes = False
         self.RUC.S.D.update_oversample_during_refinement = False
