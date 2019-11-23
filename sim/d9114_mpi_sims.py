@@ -47,6 +47,7 @@ parser.add_argument("-trials", dest='num_trials', help='trials per worker',
 parser.add_argument("--optimize-oversample", action='store_true')
 parser.add_argument("--show-params", action='store_true')
 parser.add_argument("--p9", action="store_true")
+parser.add_argument("--bs7", action="store_true")
 parser.add_argument("--kernelspergpu", default=1, type=int, help="how many processes  accessing each gpu")
 parser.add_argument("--oversample", type=int, default=0)
 parser.add_argument("--Ncells", type=float, default=15)
@@ -122,13 +123,17 @@ data_fluxes_all = h5py.File(spectra_file, "r")["hist_spec"][()] / exposure_s
 #data_fluxes_all = data_fluxes_all[args.startidx:]
 ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
 data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
-from cxid9114.parameters import ENERGY_LOW, WAVELEN_LOW
+from cxid9114.parameters import ENERGY_LOW, WAVELEN_LOW, ENERGY_HIGH, WAVELEN_HIGH
 if args.sad:
     print("Rank %d: Loading 4bs7 structure factors!" % rank)
     #_i = np.argmin(np.abs(data_energies - ENERGY_LOW))
     #data_sf = [data_sf[_i]]
     if args.p9:
         data_sf = struct_fact_special.load_p9()
+    elif args.bs7:
+        data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
+            "./4bs7.pdb", 
+            yb_scatter_name="../sf/scanned_fp_fdp.npz")
     else:
         data_sf = struct_fact_special.load_4bs7_sf()
     data_sf = [data_sf]
@@ -138,6 +143,9 @@ if args.sad:
     if args.p9:
         data_energies = np.array([12660.5])
         BEAM.set_wavelength(0.9793)
+    elif args.bs7:
+        data_energies = np.array([ENERGY_HIGH])
+        BEAM.set_wavelength(WAVELEN_HIGH)
     else:
         data_energies = np.array([ENERGY_LOW])
         BEAM.set_wavelength(WAVELEN_LOW)
@@ -319,8 +327,8 @@ for i_data in range(args.num_trials):
     if add_background:
         print("Rank %d: ADDING BG" % rank)
         # background was made using average flux over all shots, so scale it up/down here
-        bg_scale = data_fluxes.sum() / ave_flux_across_exp
         # TODO consider varying the background level to simultate jet thickness jitter
+        bg_scale = data_fluxes.sum() / ave_flux_across_exp
         if args.cspad:
             simsDataSum += background * bg_scale
         else:
