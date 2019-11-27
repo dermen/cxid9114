@@ -39,6 +39,7 @@ if rank == 0:
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
+    parser.add_argument('--filterbad', action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--sad", action="store_true")
@@ -750,6 +751,7 @@ class FatData:
         self.RUC.verbose = False
         self.RUC.use_rot_priors = False
         self.RUC.use_ucell_priors = False
+        self.RUC.filter_bad_shots = args.filterbad
         self.RUC.FNAMES = self.all_fnames
         self.RUC.PROC_FNAMES = self.all_proc_fnames
         self.RUC.PROC_IDX = self.all_proc_idx
