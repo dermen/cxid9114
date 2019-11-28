@@ -40,6 +40,7 @@ if rank == 0:
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument('--filterbad', action='store_true')
+    parser.add_argument("--maxcalls", type=int, default=30000)
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--sad", action="store_true")
@@ -749,7 +750,7 @@ class FatData:
         self.RUC.poisson_only = args.poissononly
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
-        self.RUC.max_calls = 30000
+        self.RUC.max_calls = args.maxcalls
         self.RUC.verbose = False
         self.RUC.use_rot_priors = False
         self.RUC.use_ucell_priors = False
