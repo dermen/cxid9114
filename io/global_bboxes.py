@@ -323,6 +323,8 @@ class FatData:
                 dirname = os.path.dirname(args.restartfile)
                 print ("Loading shot mapping from dir %s" % dirname)
                 shots_for_rank = np.load(os.path.join(dirname, "shots_for_rank.npy"))
+                # propagate the shots for rank file...
+                np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
             # close the open h5s..
             for h in h5s:
                 h.close()
