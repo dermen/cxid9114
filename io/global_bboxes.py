@@ -48,6 +48,7 @@ if rank == 0:
     parser.add_argument("--bg", action="store_true")
     parser.add_argument("--p9", action="store_true")
     parser.add_argument("--bs7", action="store_true")
+    parser.add_argument("--bs7real", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
     parser.add_argument("--poissononly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
@@ -56,6 +57,7 @@ if rank == 0:
     parser.add_argument("--perimage", action="store_true")
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
+    parser.add_argument("--forcemono", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--fcellbump", default=0.1, type=float)
     parser.add_argument("--oversample", default=0, type=int)
@@ -248,7 +250,7 @@ class FatData:
         if args.sad:
             if args.p9:
                 self.SIM.D.spot_scale = 3050
-            elif args.bs7:
+            elif args.bs7 or args.bs7real:
                 self.SIM.D.spot_scale = 250
             else:
                 self.SIM.D.spot_scale = .7
@@ -481,9 +483,13 @@ class FatData:
             #exit()
             fluxes *= es  # multiply by the exposure time
             # TODO: wavelens should come from the imageset file itself
+            wavelens = data["wavelengths"] [()]
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
+
+            if args.forcemono:
+                spectrum = [(B.get_wavelength(), sum(fluxes))]
 
             # make a unit cell manager that the refiner will use to track the B-matrix
             aa, _, cc, _, _, _ = C_tru.get_unit_cell().parameters()
@@ -514,8 +520,8 @@ class FatData:
                         wavelen = WAVELEN_LOW
                         from cxid9114.sf.struct_fact_special import load_4bs7_sf
                         Fhkl_guess = load_4bs7_sf()
-
-                    spectrum = [(wavelen, fluxes[0])]
+                    if not args.bs7real:
+                        spectrum = [(wavelen, fluxes[0])]
                     # end if sad
                 self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 

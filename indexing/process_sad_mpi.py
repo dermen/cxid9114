@@ -2,6 +2,7 @@
 
 from argparse import ArgumentParser
 from copy import deepcopy
+from scipy.ndimage.morphology import binary_dilation
 
 parser = ArgumentParser("Make prediction boxes")
 
@@ -13,6 +14,7 @@ parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
 parser.add_argument("--Z", type=float, default=2)
 parser.add_argument("--dilate", default=1, type=int)
+parser.add_argument("--bgname", type=str, default="../sim/bs7real_cspad.h5")
 parser.add_argument("--defaultF", type=float, default=1e3)
 parser.add_argument("--spline", action="store_true")
 parser.add_argument("--sanitycheck", action="store_true")
@@ -106,7 +108,8 @@ all_paths = []
 all_Amats = []
 odir = args.o
 
-background = h5py.File("../sim/boop_cspad.h5", "r")['bigsim_d9114'][()]
+background = h5py.File(args.bgname, "r")['bigsim_d9114'][()]
+#background = h5py.File("../sim/boop_cspad.h5", "r")['bigsim_d9114'][()]
 
 writer = h5py.File(os.path.join(odir, "process_rank%d.h5" % rank), "w")
 
@@ -230,7 +233,6 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         # dilate masks
         dilate_factor = args.dilate
         bbox_masks_dilated = []
-        from scipy.ndimage.morphology import binary_dilation
         for mask in bbox_masks:
             bbox_masks_dilated.append(
                 binary_dilation(mask, iterations=dilate_factor))
@@ -390,17 +392,21 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         #shoebox_mask2[sz:-sz, sz:-sz] = ~bbox_masks_dilated[i_bbox]
         #shoebox_mask_total = ~np.logical_or(~shoebox_mask2, ~shoebox_mask)
         try:
-            tilt, bgmask, coeff, _ = tilting_plane(
+            tilt, bgmask, coeff, _, tilt_resid = tilting_plane(
                 shoebox_img,
                 mask=shoebox_mask,  # mask specifies which spots are bg pixels...
                 zscore=args.Z,  # zscore is standard M.A.D. score for removing additional zingers from the fit
-                spline=args.spline)
+                spline=args.spline,
+                return_resid=True)
             successes.append(True)
         except:
             successes.append(False)
         # note this fit should be EXACT, linear regression..
         tilt_abc.append((coeff[1], coeff[2], coeff[0]))  # store as fast-scan coeff, slow-scan coeff, offset coeff
-        error_in_tilt.append(np.sqrt(np.mean((tilt-bg)**2)))
+        # NOTE try the residual instead of the ground truth as a filter
+        #error_in_tilt.append(np.sqrt(np.mean((tilt-bg)**2)))
+        nbg_pix = np.logical_and(~bgmask, shoebox_mask).sum()
+        error_in_tilt.append(tilt_resid[0] / nbg_pix)
         if rank == 0 and args.debug:
             print("Bbox %d/%d, error in tilt=%.4f" % (i_bbox, len(bboxes), error_in_tilt[-1]))
 
