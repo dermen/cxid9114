@@ -126,6 +126,7 @@ if rank == 0:
 
 else:
     np_indices = None
+    sf_path = None
     diff_rot = None
     compare_with_ground_truth = None
     args = None
@@ -159,6 +160,7 @@ if has_mpi:
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
+    sf_path = comm.bcast(sf_path, root=0)
     Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
     wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
@@ -502,9 +504,11 @@ class FatData:
                     elif args.bs7:
                         from cxid9114.parameters import WAVELEN_HIGH
                         from cxid9114.sf import struct_fact_special
+                        import os
                         wavelen = WAVELEN_HIGH
-                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", 
-                                        yb_scatter_name="../sf/scanned_fp_fdp.npz")
+                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, 
+                            os.path.join(sf_path, "../sim/4bs7.pdb"), 
+                            yb_scatter_name=os.path.join(sf_path, "../sf/scanned_fp_fdp.npz"))
                     else:
                         from cxid9114.parameters import WAVELEN_LOW
                         wavelen = WAVELEN_LOW
