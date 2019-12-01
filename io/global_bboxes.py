@@ -507,7 +507,7 @@ class FatData:
                         wavelen = 0.9793
                         from cxid9114.sf.struct_fact_special import load_p9
                         Fhkl_guess = load_p9()
-                    elif args.bs7:
+                    elif args.bs7 or args.bs7real:
                         from cxid9114.parameters import WAVELEN_HIGH
                         from cxid9114.sf import struct_fact_special
                         import os
@@ -520,6 +520,7 @@ class FatData:
                         wavelen = WAVELEN_LOW
                         from cxid9114.sf.struct_fact_special import load_4bs7_sf
                         Fhkl_guess = load_4bs7_sf()
+
                     if not args.bs7real:
                         spectrum = [(wavelen, fluxes[0])]
                     # end if sad
