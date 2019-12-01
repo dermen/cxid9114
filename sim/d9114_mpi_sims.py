@@ -20,6 +20,7 @@ parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
 parser.add_argument("--sad", action="store_true")
+parser.add_argument("--renormflux", action="store_true")
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true',
                     help="seed the random number generator with worker Id")
@@ -194,6 +195,9 @@ for i_data in range(args.num_trials):
         if args.bs7real:
             data_fluxes = data_fluxes_all[flux_id]
             data_fluxes[data_fluxes < min_flux] = 0
+            if args.renormflux:
+                data_fluxes /= data_fluxes.sum()
+                data_fluxes *= ave_flux_across_exp
             data_energies = ENERGY_CONV/data_wavelengths_all[flux_id]
             BEAM.set_wavelength(float(data_wave_ebeams_all[flux_id]))
             data_sf = data_sf + [None]*(len(data_energies)-1)
@@ -248,7 +252,7 @@ for i_data in range(args.num_trials):
     if masterscale is not None:
         masterscale = np.random.normal(masterscale, args.masterscalejitter)
     if masterscale < 0.1:  # FIXME: make me more smart
-        master_scale = 0.1
+         master_scale = 0.1
     sim_kwargs = {'pids': None,
                   'profile': args.profile,
                   'cuda': cuda,
@@ -320,10 +324,10 @@ for i_data in range(args.num_trials):
         sys.exit()
 
     if add_background:
-        print("Rank %d: ADDING BG" % rank)
         # background was made using average flux over all shots, so scale it up/down here
         # TODO consider varying the background level to simultate jet thickness jitter
         bg_scale = data_fluxes.sum() / ave_flux_across_exp
+        print("Rank %d: ADDING BG with scale of %f" % (rank,bg_scale))
         if args.cspad:
             simsDataSum += background * bg_scale
         else:
