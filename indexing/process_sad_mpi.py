@@ -3,6 +3,7 @@
 from argparse import ArgumentParser
 from copy import deepcopy
 from scipy.ndimage.morphology import binary_dilation
+from IPython import embed
 
 parser = ArgumentParser("Make prediction boxes")
 
@@ -156,7 +157,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     xtal_size = 0.0005  #h5["xtal_size_mm"][()]
 
     # load reflections
-    # Note this is used un order to make the strong spot mask to remove spots from background fits
+    # Note this is used in order to make the strong spot mask to remove spots from background fits
     refls_data = utils.open_flex(refl_pkl)
 
     # make a sad spectrum
@@ -197,7 +198,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     fs_dim, ss_dim = DET[0].get_image_size()
     if args.usepredictions:
         beams = []
-        device_Id = i_shot % n_gpu
+        device_Id = np.random.choice(range(n_gpu))
         simsAB = sim_utils.sim_colors(
             crystal, DET, BEAM, FF,
             energies,
