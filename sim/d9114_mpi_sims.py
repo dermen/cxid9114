@@ -20,6 +20,7 @@ parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
 parser.add_argument("--sad", action="store_true")
+parser.add_argument("--renormflux", action="store_true")
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true',
                     help="seed the random number generator with worker Id")
@@ -48,6 +49,7 @@ parser.add_argument("--optimize-oversample", action='store_true')
 parser.add_argument("--show-params", action='store_true')
 parser.add_argument("--p9", action="store_true")
 parser.add_argument("--bs7", action="store_true")
+parser.add_argument("--bs7real", action="store_true")
 parser.add_argument("--kernelspergpu", default=1, type=int, help="how many processes  accessing each gpu")
 parser.add_argument("--oversample", type=int, default=0)
 parser.add_argument("--Ncells", type=float, default=15)
@@ -75,8 +77,9 @@ div_tup = (0, 0, 0)  # (0.13, .13, 0.06)  # horiz, verti, stpsz (mrads)
 kernels_per_gpu = args.kernelspergpu
 smi_stride = 5
 GAIN = 28
+min_flux = 5e8
 beam_diam_mm = 1. * 1e-3
-exposure_s = 50e-15  # 1 #50e-15  # 50 femtoseconds
+exposure_s = 1
 mos_spread = args.mos_spread_deg
 mos_doms = args.mos_doms
 adc_offset = 0
@@ -103,12 +106,7 @@ if args.cspad:  # use a cspad for simulation
     # put this new CSPAD in the same plane as the single panel detector (originZ)
     for pid in range(len(CSPAD)):
         CSPAD[pid].set_trusted_range(DET[0].get_trusted_range())
-        # node_d = CSPAD[pid].to_dict()
-        # node_d["origin"] = node_d["origin"][0], node_d["origin"][1], DET[0].get_origin()[2]
-        # CSPAD[pid] = Panel.from_dict(node_d)
-    # from IPython import embed
-    # embed()
-    DET = CSPAD  # rename
+    DET = CSPAD
 
 if args.use_rank_as_seed:
     np.random.seed(rank)
@@ -116,21 +114,19 @@ else:
     np.random.seed(args.seed)
 
 sim_path = os.path.dirname(sim_utils.__file__)
-spectra_file = os.path.join(sim_path, "../spec/realspec.h5")
-sfall_file = os.path.join(sim_path, "../sf/realspec_sfall.h5")
+spectra_filename = os.path.join(sim_path, "../spec/bs7_10000spec.h5")
+spec_h5 = h5py.File(spectra_filename, "r")
+data_fluxes_all = spec_h5["fluxes"][()].astype(float)
+data_wavelengths_all = spec_h5["wavelengths"][()].astype(float)
+data_wave_ebeams_all = spec_h5["wave_ebeams"][()].astype(float)
 
-data_fluxes_all = h5py.File(spectra_file, "r")["hist_spec"][()] / exposure_s
-#data_fluxes_all = data_fluxes_all[args.startidx:]
 ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
-data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
-from cxid9114.parameters import ENERGY_LOW, WAVELEN_LOW, ENERGY_HIGH, WAVELEN_HIGH
+from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW, WAVELEN_LOW, ENERGY_HIGH, WAVELEN_HIGH
 if args.sad:
     print("Rank %d: Loading 4bs7 structure factors!" % rank)
-    #_i = np.argmin(np.abs(data_energies - ENERGY_LOW))
-    #data_sf = [data_sf[_i]]
     if args.p9:
         data_sf = struct_fact_special.load_p9()
-    elif args.bs7:
+    elif args.bs7 or args.bs7real:
         data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
             "./4bs7.pdb", 
             yb_scatter_name="../sf/scanned_fp_fdp.npz")
@@ -151,7 +147,8 @@ if args.sad:
         BEAM.set_wavelength(WAVELEN_LOW)
 
 beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
-data_fluxes_worker = np.array_split(data_fluxes_all, size)[rank]
+
+
 data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
 a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
 hall = data_sf[0].space_group_info().type().hall_symbol()
@@ -161,7 +158,7 @@ odirj = os.path.join(odir, "job%d" % rank)
 if not os.path.exists(odirj):
     os.makedirs(odirj)
 
-if add_background:
+if add_background and not make_background :
     assert args.bg_name is not None
     background = h5py.File(args.bg_name, "r")['bigsim_d9114'][()]
     if args.cspad:
@@ -173,14 +170,15 @@ for i_data in range(args.num_trials):
     h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, rank, i_data, flux_id)
     h5name = os.path.join(odirj, h5name)
     if os.path.exists(h5name) and not args.overwrite:
-        print("Rank %d: skipping- image %s already exists!" \
-              % (rank, h5name))
+        #print("Rank %d: skipping- image %s already exists!" \
+        #      % (rank, h5name))
         continue
 
-    device_Id = i_data % ngpu_per_node
+    #device_Id = flux_id % ngpu_per_node
+    device_Id = np.random.choice(range(ngpu_per_node))
 
     print("<><><><><><><")
-    print("Rank %d:  trial  %d / %d" % (rank, i_data + 1, args.num_trials))
+    print("Rank %d:  trial  %d / %d on device %d" % (rank, i_data + 1, args.num_trials, device_Id))
     print("<><><><><><><")
 
     # If im the zeroth worker I want to show usage statisitcs:
@@ -193,10 +191,18 @@ for i_data in range(args.num_trials):
         mem_usg = """ps -U dermen --no-headers -o rss | awk '{ sum+=$1} END {print int(sum/1024) "MB consumed by CPU user"}'"""
         os.system(mem_usg)
 
-    data_fluxes = data_fluxes_worker[i_data]
-
     if args.sad:
-        data_fluxes = np.array([ave_flux_across_exp])
+        if args.bs7real:
+            data_fluxes = data_fluxes_all[flux_id]
+            data_fluxes[data_fluxes < min_flux] = 0
+            if args.renormflux:
+                data_fluxes /= data_fluxes.sum()
+                data_fluxes *= ave_flux_across_exp
+            data_energies = ENERGY_CONV/data_wavelengths_all[flux_id]
+            BEAM.set_wavelength(float(data_wave_ebeams_all[flux_id]))
+            data_sf = data_sf + [None]*(len(data_energies)-1)
+        else:
+            data_fluxes = np.array([ave_flux_across_exp])
 
     a = np.random.normal(a, args.ucelljitter)
     c = np.random.normal(c, args.ucelljitter)
@@ -214,13 +220,6 @@ for i_data in range(args.num_trials):
     Rrand = random_rotation(1, randnums)
     crystal.set_U(Rrand.ravel())
 
-    ## NOTE start debug hack
-    # _A = np.array([-0.00659296, -0.00848504, -0.01388453,
-    #               -0.00458244,  0.00930397, -0.01505553,
-    #               0.00979487, -0.00135853, -0.01638933])
-    # crystal.set_A(_A)
-    ## NOTE end debug hack
-
     # NOTE: This can be used to simulate jitter in the
     # crystal model, but for now we disable jitter
     # params_lst = make_param_list(crystal, DET, BEAM,
@@ -236,9 +235,9 @@ for i_data in range(args.num_trials):
     # to aid simulation of a background image using same pipeline
     if make_background:
         print("Rank %d: MAKING BACKGROUND : just at two colors" % rank)
-        data_fluxes = [ave_flux_across_exp * .5, ave_flux_across_exp * .5]
-        data_energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]  # should be 8944 and 9034
-        data_sf = [1, 1]  # dont care about structure factors when simulating background water scatter
+        data_fluxes = [ave_flux_across_exp]
+        data_energies = [parameters.ENERGY_HIGH]  # should be 8944 and 9034
+        data_sf = [1]  # dont care about structure factors when simulating background water scatter
         Ncells_abc = 10, 10, 10
         only_water = True
     else:
@@ -253,7 +252,7 @@ for i_data in range(args.num_trials):
     if masterscale is not None:
         masterscale = np.random.normal(masterscale, args.masterscalejitter)
     if masterscale < 0.1:  # FIXME: make me more smart
-        master_scale = 0.1
+         master_scale = 0.1
     sim_kwargs = {'pids': None,
                   'profile': args.profile,
                   'cuda': cuda,
@@ -272,7 +271,7 @@ for i_data in range(args.num_trials):
                   'adc_offset': adc_offset,
                   'show_params': args.show_params,
                   'crystal_size_mm': xtal_size_mm,
-                  'one_sf_array': True} #data_sf[0] is not None and data_sf[1] is None}
+                  'one_sf_array': True}  #data_sf[0] is not None and data_sf[1] is None}
 
     print ("Rank %d: SIULATING DATA IMAGE" % rank)
     if args.optimize_oversample:
@@ -325,10 +324,10 @@ for i_data in range(args.num_trials):
         sys.exit()
 
     if add_background:
-        print("Rank %d: ADDING BG" % rank)
         # background was made using average flux over all shots, so scale it up/down here
         # TODO consider varying the background level to simultate jet thickness jitter
         bg_scale = data_fluxes.sum() / ave_flux_across_exp
+        print("Rank %d: ADDING BG with scale of %f" % (rank,bg_scale))
         if args.cspad:
             simsDataSum += background * bg_scale
         else:
@@ -387,6 +386,7 @@ for i_data in range(args.num_trials):
         fout.create_dataset("crystalA", data=crystal.get_A())
         fout.create_dataset("crystalU", data=crystal.get_U())
         fout.create_dataset("spectrum", data=data_fluxes)
+        fout.create_dataset("wavelengths", data=ENERGY_CONV/data_energies)
         fout.create_dataset("mos_doms", data=mos_doms)
         fout.create_dataset("mos_spread", data=mos_spread)
         fout.create_dataset("Ncells_abc", data=Ncells_abc)

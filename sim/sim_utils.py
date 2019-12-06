@@ -216,7 +216,7 @@ class PatternFactory:
 
     def primer(self, crystal, energy, flux, F=None):
         self.SIM2.wavelength_A = parameters.ENERGY_CONV / energy
-        self.SIM2.flux = flux
+        self.SIM2.flux = float(flux)
         # order of things is important here, Amatrix needs to be set
         #   after Fhkl in current code!!
 
