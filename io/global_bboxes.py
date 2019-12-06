@@ -39,6 +39,8 @@ if rank == 0:
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
+    parser.add_argument('--filterbad', action='store_true')
+    parser.add_argument("--maxcalls", type=int, default=30000)
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--sad", action="store_true")
@@ -46,6 +48,7 @@ if rank == 0:
     parser.add_argument("--bg", action="store_true")
     parser.add_argument("--p9", action="store_true")
     parser.add_argument("--bs7", action="store_true")
+    parser.add_argument("--bs7real", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
     parser.add_argument("--poissononly", action="store_true")
     parser.add_argument("--boopi", type=int, default=0)
@@ -54,6 +57,7 @@ if rank == 0:
     parser.add_argument("--perimage", action="store_true")
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
+    parser.add_argument("--forcemono", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--fcellbump", default=0.1, type=float)
     parser.add_argument("--oversample", default=0, type=int)
@@ -124,6 +128,7 @@ if rank == 0:
 
 else:
     np_indices = None
+    sf_path = None
     diff_rot = None
     compare_with_ground_truth = None
     args = None
@@ -157,6 +162,7 @@ if has_mpi:
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
+    sf_path = comm.bcast(sf_path, root=0)
     Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
     wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
@@ -244,7 +250,7 @@ class FatData:
         if args.sad:
             if args.p9:
                 self.SIM.D.spot_scale = 3050
-            elif args.bs7:
+            elif args.bs7 or args.bs7real:
                 self.SIM.D.spot_scale = 250
             else:
                 self.SIM.D.spot_scale = .7
@@ -322,6 +328,8 @@ class FatData:
                 dirname = os.path.dirname(args.restartfile)
                 print ("Loading shot mapping from dir %s" % dirname)
                 shots_for_rank = np.load(os.path.join(dirname, "shots_for_rank.npy"))
+                # propagate the shots for rank file...
+                np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
             # close the open h5s..
             for h in h5s:
                 h.close()
@@ -475,9 +483,13 @@ class FatData:
             #exit()
             fluxes *= es  # multiply by the exposure time
             # TODO: wavelens should come from the imageset file itself
+            wavelens = data["wavelengths"] [()]
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
+
+            if args.forcemono:
+                spectrum = [(B.get_wavelength(), sum(fluxes))]
 
             # make a unit cell manager that the refiner will use to track the B-matrix
             aa, _, cc, _, _, _ = C_tru.get_unit_cell().parameters()
@@ -495,19 +507,22 @@ class FatData:
                         wavelen = 0.9793
                         from cxid9114.sf.struct_fact_special import load_p9
                         Fhkl_guess = load_p9()
-                    elif args.bs7:
+                    elif args.bs7 or args.bs7real:
                         from cxid9114.parameters import WAVELEN_HIGH
                         from cxid9114.sf import struct_fact_special
+                        import os
                         wavelen = WAVELEN_HIGH
-                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", 
-                                        yb_scatter_name="../sf/scanned_fp_fdp.npz")
+                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, 
+                            os.path.join(sf_path, "../sim/4bs7.pdb"), 
+                            yb_scatter_name=os.path.join(sf_path, "../sf/scanned_fp_fdp.npz"))
                     else:
                         from cxid9114.parameters import WAVELEN_LOW
                         wavelen = WAVELEN_LOW
                         from cxid9114.sf.struct_fact_special import load_4bs7_sf
                         Fhkl_guess = load_4bs7_sf()
 
-                    spectrum = [(wavelen, fluxes[0])]
+                    if not args.bs7real:
+                        spectrum = [(wavelen, fluxes[0])]
                     # end if sad
                 self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
 
@@ -746,10 +761,11 @@ class FatData:
         self.RUC.poisson_only = args.poissononly
         self.RUC.plot_stride = args.stride
         self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
-        self.RUC.max_calls = 30000
+        self.RUC.max_calls = args.maxcalls
         self.RUC.verbose = False
         self.RUC.use_rot_priors = False
         self.RUC.use_ucell_priors = False
+        self.RUC.filter_bad_shots = args.filterbad
         self.RUC.FNAMES = self.all_fnames
         self.RUC.PROC_FNAMES = self.all_proc_fnames
         self.RUC.PROC_IDX = self.all_proc_idx
