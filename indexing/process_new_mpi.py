@@ -9,6 +9,7 @@ parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
+parser.add_argument("--pause", type=float, default=0.5)
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--glob", type=str, required=True, help="experiment list glob")
@@ -26,11 +27,11 @@ parser.add_argument("--plot", default=None, type=float )
 parser.add_argument("--plottilt", default=None, type=float )
 parser.add_argument("--usegt", action="store_true")
 parser.add_argument("--usepredictions", action="store_true")
-parser.add_argument("--newsnrfilter", action='store_true')
 parser.add_argument("--show_params", action='store_true')
 parser.add_argument("--forcelambda", type=float, default=None)
 parser.add_argument("--noiseless", action="store_true")
 parser.add_argument("--symbol", default="P43212", type=str)
+parser.add_argument("--sanityplots", action='store_true')
 args = parser.parse_args()
 
 import glob
@@ -42,7 +43,7 @@ import h5py
 from scipy.ndimage.morphology import binary_dilation
 from IPython import embed
 
-from dxtbx.model.experiment_list import ExperimentListFactory
+from dxtbx.model.experiment_list import ExperimentListFactory, Experiment
 from cctbx import miller, sgtbx
 from scitbx.array_family import flex
 from cctbx.crystal import symmetry
@@ -69,6 +70,8 @@ except ImportError:
 
 if rank == 0:
     print(args)
+    if args.sanityplots:
+        import pylab as plt
 
 # Load in the reflection tables and experiment lists
 Els = glob.glob(args.glob)
@@ -150,28 +153,6 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     total_flux = np.sum(spectrum)
     xtal_size = 0.0005  #h5["xtal_size_mm"][()]
 
-    # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
-    # HERE WE LOAD THE STRONG SPOTS AND MAKE THEM INTO A MASK
-    # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
-    # load strong spot reflections
-    refls_strong = utils.open_flex(refl_pkl)
-    # make mask of all strong spot pixels..
-    nfast, nslow = DET[0].get_image_size()
-    img_shape = nslow, nfast  # numpy format
-    n_panels = len(DET)
-    # make a mask that tells me True if I am a background pixel
-    is_bg_pixel = np.ones((n_panels, nslow, nfast), bool)
-    # group the refls by panel ID
-    refls_strong_perpan = prediction_utils.refls_by_panelname(refls_strong)
-    for panel_id in refls_strong_perpan:
-        fast, slow = DET[panel_id].get_image_size()
-        mask = prediction_utils.strong_spot_mask_dials(
-            refls_strong_perpan[panel_id], (slow, fast),
-            as_composite=True)
-        # dilate the mask
-        mask = binary_dilation(mask, iterations=args.dilate)
-        is_bg_pixel[panel_id] = ~mask  # strong spots should not be background pixels
-
     # <><><><><><><><><><><><><><
     # HERE WE WILL DO PREDICTIONS
     # <><><><><><><><><><><><><><
@@ -190,6 +171,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
     fs_dim, ss_dim = DET[0].get_image_size()
+    n_panels = len(DET)
     # grab the crystal
     crystal = El.crystals()[0]
 
@@ -207,6 +189,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # Note how to handle sys absences here ?
     Famp = flex.double(np.ones(len(miller_set.indices())) * args.defaultF)
     mil_ar = miller.array(miller_set=miller_set, data=Famp).set_observation_type_xray_amplitude()
+    FF = [mil_ar]
     # Optionally use a miller array from a model to do predictions, as opposed to a flat miller array
     if args.miller is not None:
         if args.miller == "bs7":
@@ -255,9 +238,32 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
         else:
             panel_integration_masks[panel_id] = np.logical_or(mask, panel_integration_masks[panel_id])
 
+    # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+    # HERE WE LOAD THE STRONG SPOTS AND MAKE THEM INTO A MASK
+    # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+    # load strong spot reflections
+    refls_strong = utils.open_flex(refl_pkl)
+    # make mask of all strong spot pixels..
+    nfast, nslow = DET[0].get_image_size()
+    img_shape = nslow, nfast  # numpy format
+    # make a mask that tells me True if I am a background pixel
+    is_bg_pixel = np.ones((n_panels, nslow, nfast), bool)
+    # group the refls by panel ID
+    refls_strong_perpan = prediction_utils.refls_by_panelname(refls_strong)
+    for panel_id in refls_strong_perpan:
+        fast, slow = DET[panel_id].get_image_size()
+        mask = prediction_utils.strong_spot_mask_dials(
+            refls_strong_perpan[panel_id], (slow, fast),
+            as_composite=True)
+        # dilate the mask
+        mask = binary_dilation(mask, iterations=args.dilate)
+        is_bg_pixel[panel_id] = ~mask  # strong spots should not be background pixels
+
+
     # Combine strong spot mask and integration mask, both with there dilations, to get the best
     # possible selection of background pixels..
-    for i_predict, ref_predict in enumerate(refls_predict):
+    for i_predict in range(n_predict):
+        ref_predict = refls_predict[i_predict]
         i1, i2, j1, j2, _, _ = ref_predict['bbox']
         i_panel = ref_predict['panel']
         integration_mask = panel_integration_masks[i_panel][j1:j2, i1:i2]
@@ -278,19 +284,56 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # 3. Updates prediction reflections with integrations and integration variances
     #    using Leslie 99
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
+    exper = Experiment()
+    exper.detector = DET
+    exper.beam = BEAM
+    exper.crystal = crystal
     results = tilt_fit(
         imgs=img_data, is_bg_pix=is_bg_pixel,
         delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
-        exper=El[0], predicted_refls=refls_predict)
+        exper=exper, predicted_refls=refls_predict)
 
     refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
-
     spot_snr = I_Leslie99 / varI_Leslie99
-
     shoeboxes = refls_predict['shoebox']
     bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
     bbox_panel_ids = np.array([r['panel'] for r in refls_predict])
     Hi = np.vstack([r['miller_index'] for r in refls_predict])
+
+    # <><><><><><><><><><><><><><><>
+    # DO THE SANITY PLOTS (OPTIONAL)
+    # <><><><><><><><><><><><><><><>
+    if rank == 0 and args.sanityplots:
+        refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
+        plt.figure()
+        pause = args.pause
+        for panel_id in refls_predict_bypanel:
+            panel_img = img_data[panel_id]
+            m = panel_img.mean()
+            s = panel_img.std()
+            vmax = m + 4*s
+            vmin = m - s
+            plt.cla()
+            im = plt.imshow(panel_img, vmax=vmax, vmin=vmin)
+            int_mask = np.ones(panel_img.shape).astype(np.bool)
+            bg_mask = np.ones(panel_img.shape).astype(np.bool)
+            for ref in refls_predict_bypanel[panel_id]:
+                i1, i2, j1, j2, _, _ = ref['shoebox'].bbox
+                rect = plt.Rectangle(xy=(i1, j1), width=i2-i1, height=j2-j1, fc='none', ec='Deeppink')
+                plt.add_patch(rect)
+                mask = ref['shoebox'].mask.as_numpy_array()
+                int_mask = np.logical_or(mask == 5, int_mask)
+                bg_mask = np.logical_or(mask == 19, bg_mask)
+            plt.draw()
+            plt.pause(pause)
+            im.set_data(int_mask)
+            im.set_clim(0, 1)
+            plt.draw()
+            plt.pause(pause)
+            im.set_data(bg_mask)
+            im.set_clim(0, 1)
+            plt.draw()
+            plt.pause(pause)
 
     all_paths.append(fpath)
     all_Amats.append(crystal.get_A())
