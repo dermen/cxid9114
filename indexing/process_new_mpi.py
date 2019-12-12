@@ -18,6 +18,7 @@ parser.add_argument("--deltaq", type=float, default=0.07)
 parser.add_argument("--dilate", default=1, type=int)
 parser.add_argument("--bgname", type=str, default=None)
 parser.add_argument("--defaultF", type=float, default=1e3)
+parser.add_argument("--sbpad", type=int, default=0, help="padding for background tilt plant fit")
 parser.add_argument("--spline", action="store_true")
 parser.add_argument("--sanitycheck", action="store_true")
 parser.add_argument("--thresh", type=float, default=1e-2)
@@ -124,7 +125,6 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # get the experiment stuffs
     El = ExperimentListFactory.from_json_file(El_json, check_format=True)
     # El = ExperimentListFactory.from_json_file(El_json, check_format=False)
-
     iset = El.imagesets()[0]
     fpath = iset.get_path(0)
     # this is the file containing relevant simulation parameters..
@@ -288,17 +288,20 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     exper.detector = DET
     exper.beam = BEAM
     exper.crystal = crystal
+    exper.imageset = El[0].imageset
     results = tilt_fit(
         imgs=img_data, is_bg_pix=is_bg_pixel,
         delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
-        exper=exper, predicted_refls=refls_predict)
+        exper=exper, predicted_refls=refls_predict, sb_pad=args.sbpad)
 
     refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
-    spot_snr = I_Leslie99 / varI_Leslie99
+    spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
     shoeboxes = refls_predict['shoebox']
     bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
-    bbox_panel_ids = np.array([r['panel'] for r in refls_predict])
-    Hi = np.vstack([r['miller_index'] for r in refls_predict])
+    bbox_panel_ids = np.array(refls_predict['panel'])
+    Hi = np.vstack(refls_predict['miller_index'])
+    did_i_index = np.array(refls_predict['id'])
+    boundary_spot = np.array(refls_predict['boundary'])
 
     # <><><><><><><><><><><><><><><>
     # DO THE SANITY PLOTS (OPTIONAL)
@@ -315,22 +318,26 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
             vmin = m - s
             plt.cla()
             im = plt.imshow(panel_img, vmax=vmax, vmin=vmin)
-            int_mask = np.ones(panel_img.shape).astype(np.bool)
-            bg_mask = np.ones(panel_img.shape).astype(np.bool)
-            for ref in refls_predict_bypanel[panel_id]:
+            int_mask = np.zeros(panel_img.shape).astype(np.bool)
+            bg_mask = np.zeros(panel_img.shape).astype(np.bool)
+
+            for i_ref in range(len(refls_predict_bypanel[panel_id])):
+                ref = refls_predict_bypanel[panel_id][i_ref]
                 i1, i2, j1, j2, _, _ = ref['shoebox'].bbox
                 rect = plt.Rectangle(xy=(i1, j1), width=i2-i1, height=j2-j1, fc='none', ec='Deeppink')
-                plt.add_patch(rect)
-                mask = ref['shoebox'].mask.as_numpy_array()
-                int_mask = np.logical_or(mask == 5, int_mask)
-                bg_mask = np.logical_or(mask == 19, bg_mask)
+                plt.gca().add_patch(rect)
+                mask = ref['shoebox'].mask.as_numpy_array()[0]
+                int_mask[j1:j2, i1:i2] = np.logical_or(mask == 5, int_mask[j1:j2, i1:i2])
+                bg_mask[j1:j2, i1:i2] = np.logical_or(mask == 19, bg_mask[j1:j2, i1:i2])
             plt.draw()
             plt.pause(pause)
             im.set_data(int_mask)
+            plt.title("panel%d: integration mask" % i_panel)
             im.set_clim(0, 1)
             plt.draw()
             plt.pause(pause)
             im.set_data(bg_mask)
+            plt.title("panel%d: background mask" % i_panel)
             im.set_clim(0, 1)
             plt.draw()
             plt.pause(pause)
@@ -345,6 +352,8 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     writer.create_dataset("tilt_error/shot%d" % n_processed, data=error_in_tilt,  dtype=np.float32, compression="lzf" )
     writer.create_dataset("SNR_Leslie99/shot%d" % n_processed, data=spot_snr, dtype=np.float32, compression="lzf" )
     writer.create_dataset("Hi/shot%d" % n_processed, data=Hi, dtype=np.int, compression="lzf")
+    writer.create_dataset("indexed_flag/shot%d" % n_processed, data=did_i_index, dtype=np.int, compression="lzf")
+    writer.create_dataset("is_on_boundary/shot%d" % n_processed, data=boundary_spot, dtype=np.bool, compression="lzf")
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
     # add the default peak selection flags (default is all True, so select all peaks for refinement)
     keepers = np.ones(len(bboxes)).astype(np.bool)
