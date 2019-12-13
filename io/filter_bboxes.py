@@ -13,6 +13,8 @@ except ImportError:
     rank = 0
     size = 1
 
+from IPython import embed
+
 if rank == 0:
     from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
@@ -23,6 +25,9 @@ if rank == 0:
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
     parser.add_argument("--tiltfilt", default=None, type=float, help="minimum rms for the tilt plane fit")
+    parser.add_argument("--tilterrmin", default=None, type=float, help="minimum bg plane parameter variance")
+    parser.add_argument("--onboundary", action="store_true", help="include spots that are close to the panel boundary")
+    parser.add_argument("--notindexed", action="store_true", help="include spots that were flagged as not indexed")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
     parser.add_argument("--gain", type=float, default=28)
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
@@ -74,12 +79,6 @@ def get_memory_usage():
     return mem
 
 
-# def mpi_sum(value):
-#    global_sum = np_zeros(1, dtype='float64')
-#    local_sum = np_sum(array(value)).astype('float64')
-#    comm.Reduce(local_sum, global_sum, op=MPI.SUM)
-#    return global_sum[0]
-
 # @profile
 def main():
     # some parameters
@@ -88,13 +87,9 @@ def main():
     # data is stored in 39 h5py_Files
     resmin = args.reshigh  # high res cutoff
     resmax = args.reslow  # low res cutoff
-    if args.snrmin is None:
-        min_snr = -1
-    else:
-        min_snr = args.snrmin
     fnames = glob(args.glob)
 
-    # NOTE: for reference, inside each h5 file there is 
+    # NOTE: for reference, inside each h5 file there is
     #   [u'Amatrices', u'Hi', u'bboxes', u'h5_path']
 
     # get the total number of shots using worker 0
@@ -164,27 +159,55 @@ def main():
         if len(img_data.shape) == 2:  # single panel image
             assert len(set(panel_ids)) == 1  # sanity check
             img_data = [img_data]
-            #I = Integrator(img_data, int_radius=int_radius, gain=gain)
-            #int_data = [I.integrate_bbox_dirty(bb) for bb in bboxes]
-        #else:  # multi-panel img
-            # make a dirty integrater for each panel
 
-        if min_snr > 0:
-            dirties = {pid: Integrator(img_data[pid], int_radius=int_radius, gain=gain)
+        is_a_keeper = [in_reso_ring[i_spot] for i_spot in range(nspots)]
+
+        hgroups = h.keys()
+
+        if args.snrmin is not None:
+            if "SNR_Leslie99" in hgroups:
+                SNR = h["SNR_Leslie99"]["shot%d" % shot_idx][()]
+            else:
+                if rank == 0:
+                    print("WARNING USING DIRTY SNR ESTIMATE!")
+                dirties = {pid: Integrator(img_data[pid], int_radius=int_radius, gain=gain)
                        for pid in set(panel_ids)}
 
-            int_data = [dirties[pid].integrate_bbox_dirty(bb) for pid, bb in zip(panel_ids, bboxes)]
+                int_data = [dirties[pid].integrate_bbox_dirty(bb) for pid, bb in zip(panel_ids, bboxes)]
 
-            # signal, background, variance  # these are from the paper Leslie '99
-            s, b, var = map(array, zip(*int_data))
-            snr = s / sqrt(var)
+                # signal, background, variance  # these are from the paper Leslie '99
+                s, b, var = map(array, zip(*int_data))
+                SNR = s / sqrt(var)
+            is_a_keeper = [k and snr >= args.snrmin for k, snr in zip(is_a_keeper, SNR)]
+
+        if "tilt_rms" in hgroups:
+            if args.tiltfilt is not None:
+                tilt_rms = h["tilt_rms"]["shot%d" % shot_idx][()]
+                is_a_keeper = [k and rms < args.tiltfilt for k, rms in zip(is_a_keeper, tilt_rms)]
+
+        if "tilt_error" in hgroups:
+            if args.tilterrmin is not None:
+                tilt_err = h["tilt_error"]["shot%d" % shot_idx][()]
+                is_a_keeper = [k and err <= args.tilterrmin for k, err in zip(is_a_keeper, tilt_err)]
         else:
-            snr = [12345]*nspots
+            if rank == 0:
+                print ("WARNING: tilt_error not in hdf5 file")
 
-        is_a_keeper = [in_reso_ring[i_spot] and snr[i_spot] > min_snr for i_spot in range(nspots)]
-        if args.tiltfilt is not None:
-            tilt_rms = h["tilt_rms"]["shot%d" % shot_idx][()]
-            is_a_keeper = [k and rms < args.tiltfilt for k, rms in zip(is_a_keeper, tilt_rms)]
+        if "indexed_flag" in hgroups:
+            if not args.notindexed:
+                indexed_flag = h["indexed_flag"]["shot%d" % shot_idx][()]
+                is_a_keeper = [k and (idx == 0) for k, idx in zip(is_a_keeper, indexed_flag)]
+        else:
+            if rank == 0:
+                print ("WARNING: indexed_flag not in hdf5 file")
+
+        if "is_on_boundary" in hgroups:
+            if not args.onboundary:
+                on_boundary = h["is_on_boundary"]["shot%d" % shot_idx][()]
+                is_a_keeper = [k and not onbound for k, onbound in zip(is_a_keeper, on_boundary)]
+        else:
+            if rank == 0:
+                print ("WARNING: is_on_boundary not in hdf5 file")
 
         if rank == 0:
             print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
@@ -202,8 +225,11 @@ def main():
                     patch = plt.Rectangle(xy=(x1, y1), width=x2 - x1, height=y2 - y1, fc='none', ec='r')
                     plt.gca().add_patch(patch)
                 plt.title("Panel=%d" % pid)
-                plt.draw()
-                plt.pause(args.plot)
+                if args.plot == -1:
+                    plt.show()
+                else:
+                    plt.draw()
+                    plt.pause(args.plot)
 
         kept_bboxes = [bboxes[i_bb] for i_bb in range(len(bboxes)) if is_a_keeper[i_bb]]
 
