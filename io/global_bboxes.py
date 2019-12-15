@@ -212,6 +212,7 @@ class FatData:
         self.all_xrel = {}
         self.all_yrel = {}
         self.all_Hi_asu = {}
+        self.all_crystal_scales = {}
         self.all_Hi = {}
         self.all_nanoBragg_rois = {}
         self.SIM = None  # simulator; one per rank!
@@ -452,6 +453,7 @@ class FatData:
                 h5_fname = npz_path.split(".npz")[0]
             data = h5py_File(h5_fname, "r")
 
+            xtal_scale_truth = data["spot_scale"][()]
             tru = sqr(data["crystalA"][()]).inverse().elems
             a_tru = tru[:3]
             b_tru = tru[3:6]
@@ -581,6 +583,7 @@ class FatData:
             self.all_ucell_mans[img_num] = ucell_man
             self.all_spectra[img_num] = spectrum
             self.all_crystal_models[img_num] = C
+            self.all_crystal_scales[img_num] = xtal_scale_truth
             self.all_crystal_GT[img_num] = C_tru
             self.all_xrel[img_num] = xrel
             self.all_yrel[img_num] = yrel
@@ -718,6 +721,7 @@ class FatData:
             shot_asu=self.all_Hi_asu,
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
+            all_crystal_scales=self.all_crystal_scales,
             init_gain=init_gain,
             perturb_fcell=args.perturbfcell)
 
