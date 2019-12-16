@@ -27,7 +27,7 @@ if rank == 0:
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
-    parser.add_argument("--character", type=str, choices=['rock', 'syl'], default=None, 
+    parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2'], default=None, 
         help="different refinements")
     parser.add_argument("--readoutless",action="store_true")
     parser.add_argument("--plot", action='store_true')
@@ -261,7 +261,7 @@ class FatData:
             self.SIM.D.spot_scale = 12
 
         if args.character is not None:
-            if args.character=="rock" or args.character=="syl":
+            if args.character=="rock" or args.character=="syl" or args.character == "syl2":
                 self.SIM.D.spot_scale=1150
 
     def _process_miller_data(self):
@@ -369,6 +369,8 @@ class FatData:
 
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
+            if args.character is not None:
+                npz_path = npz_path.replace("rock", args.character)
             if args.testmode2:
                 import os
                 npz_path = npz_path.split("d9114_sims/")[1]
@@ -407,7 +409,6 @@ class FatData:
 
             ## NOTE: this is a temporary hack
             if args.startwithopt:
-                exit()
                 assert args.hack
                 f_basename = os.path.basename(npz_path)
                 crystal_dir = "/Users/dermen/crystal/modules/cxid9114/io/crystals/"
@@ -455,6 +456,8 @@ class FatData:
 
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
+            if args.character is not None:
+                h5_fname = h5_fname.replace("rock", args.character)
             if args.testmode2:
                 h5_fname = npz_path.split(".npz")[0]
             data = h5py_File(h5_fname, "r")
