@@ -167,7 +167,7 @@ class PatternFactory:
                 self.SIM2.xtal_shape = shapetype.Square
        
         if device_Id is not None: 
-            self.SIM2.device_Id=device_Id
+            self.SIM2.device_Id = device_Id
 
         self.SIM2.adc_offset = adc_offset
         self.SIM2.beamsize_mm = beamsize_mm
@@ -353,7 +353,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
         en_count = 0 
         already_primed = False
         for i_en in range(Nchan):
-            if fluxes[i_en]==0:
+            if fluxes[i_en] == 0:
                 continue
             if one_sf_array:
                 if not already_primed:

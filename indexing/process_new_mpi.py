@@ -46,7 +46,8 @@ from IPython import embed
 
 from dxtbx.model.experiment_list import ExperimentListFactory, Experiment
 from cctbx import miller, sgtbx
-from scitbx.array_family import flex
+#from scitbx.array_family import flex
+from dials.array_family import flex
 from cctbx.crystal import symmetry
 from cxid9114.sim import sim_utils
 from cxid9114.geom.multi_panel import CSPAD
@@ -242,7 +243,7 @@ for i_shot, (El_json, refl_pkl) in enumerate(zip(El_fnames, refl_fnames)):
     # HERE WE LOAD THE STRONG SPOTS AND MAKE THEM INTO A MASK
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
     # load strong spot reflections
-    refls_strong = utils.open_flex(refl_pkl)
+    refls_strong = flex.reflection_table.from_file( refl_pkl) #utils.open_flex(refl_pkl)
     # make mask of all strong spot pixels..
     nfast, nslow = DET[0].get_image_size()
     img_shape = nslow, nfast  # numpy format

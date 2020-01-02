@@ -16,6 +16,7 @@ import argparse
 
 parser = argparse.ArgumentParser("make dadat")
 parser.add_argument("--savenoiseless", action="store_true")
+parser.add_argument("--sanity", action="store_true")
 parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
@@ -114,7 +115,7 @@ else:
     np.random.seed(args.seed)
 
 sim_path = os.path.dirname(sim_utils.__file__)
-spectra_filename = os.path.join(sim_path, "../spec/bs7_10000spec.h5")
+spectra_filename = os.path.join(sim_path, "../spec/bs7_50000spec.h5")
 spec_h5 = h5py.File(spectra_filename, "r")
 data_fluxes_all = spec_h5["fluxes"][()].astype(float)
 data_wavelengths_all = spec_h5["wavelengths"][()].astype(float)
@@ -248,11 +249,12 @@ for i_data in range(args.num_trials):
         xtal_size_mm = np.random.normal(xtal_size_mm, args.xtal_size_jitter)
 
     sim_args = [crystal, DET, BEAM, data_sf, data_energies, data_fluxes]
+
     masterscale = args.masterscale
     if masterscale is not None:
         masterscale = np.random.normal(masterscale, args.masterscalejitter)
     if masterscale < 0.1:  # FIXME: make me more smart
-         master_scale = 0.1
+         masterscale = 0.1
     sim_kwargs = {'pids': None,
                   'profile': args.profile,
                   'cuda': cuda,
@@ -303,6 +305,39 @@ for i_data in range(args.num_trials):
         #
         spot_scale = PattFact.spot_scale
         simsDataSum = np.array(simsDataSum)
+
+        if args.sanity:
+            from simtbx.diffBragg import nanoBragg_beam, nanoBragg_crystal, sim_data
+
+            C = nanoBragg_crystal.nanoBragg_crystal()
+            C.dxtbx_crystal = crystal
+            C.mos_spread_deg = 0
+            C.n_mos_domains = 1
+            C.miller_array = data_sf[0].as_amplitude_array()
+            C.thick_mm = xtal_size_mm
+
+            B = nanoBragg_beam.nanoBragg_beam()
+            B.unit_s0 = BEAM.get_unit_s0()
+            B.spectrum = zip(ENERGY_CONV / data_energies, data_fluxes)
+            B.size_mm = beamsize_mm
+
+            S = sim_data.SimData()
+            S.crystal = C
+            S.detector = DET
+            S.beam = B
+            S.panel_id = 0
+            S.instantiate_diffBragg(default_F=0, oversample=0)
+            S.D.spot_scale = masterscale
+            import time
+            t1 = time.time()
+            S.D.add_diffBragg_spots()
+            t2 = time.time()
+            tf = t2-t1
+            print("Took %.4f seconds to diffBragg " % tf)
+            img0 = S.D.raw_pixels.as_numpy_array()
+            from IPython import embed
+            embed()
+
         if args.cspad:
             assert simsDataSum.shape == (64, 185, 194)
 
