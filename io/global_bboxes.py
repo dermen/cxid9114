@@ -17,7 +17,7 @@ det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
 from simtbx.diffBragg.refiners.global_refiner import FatRefiner
-from cxid9114.utils import map_hkl_list
+from cxid9114.utils import map_hkl_list, open_flex
 import sys
 from IPython import embed
 
@@ -71,6 +71,8 @@ if rank == 0:
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--partition", action="store_true")
     parser.add_argument("--partitiontime", default=5, type=float, help="seconds allowed for partitioning inputs")
+    parser.add_argument("--Fobs", type=str, required=True)
+    parser.add_argument("--Fref", type=str, required=True)
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
     parser.add_argument("--umatrix", action="store_true")
@@ -239,7 +241,8 @@ class FatData:
 
         # create a nanoBragg beam
         self.nbbeam = nanoBragg_beam()
-        self.nbbeam.size_mm = 0.001
+        self.nbbeam.size_mm = 0.000886226925452758  # NOTE its a circular beam whoops
+        #self.nbbeam.size_mm = 0.001
         self.nbbeam.unit_s0 = init_beam.get_unit_s0()
         self.nbbeam.spectrum = init_spectrum
 
@@ -261,8 +264,8 @@ class FatData:
             self.SIM.D.spot_scale = 12
 
         if args.character is not None:
-            if args.character=="rock" or args.character=="syl" or args.character == "syl2":
-                self.SIM.D.spot_scale=1150
+            if args.character == "rock" or args.character == "syl" or args.character == "syl2":
+                self.SIM.D.spot_scale = 1150
 
     def _process_miller_data(self):
         idx, data = self.SIM.D.Fhkl_tuple
@@ -494,7 +497,7 @@ class FatData:
             #exit()
             fluxes *= es  # multiply by the exposure time
             # TODO: wavelens should come from the imageset file itself
-            wavelens = data["wavelengths"] [()]
+            wavelens = data["wavelengths"][()]
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
@@ -514,28 +517,33 @@ class FatData:
             # create a nanoBragg crystal
             if img_num == 0:  # only initialize the simulator after loading the first image
                 if args.sad:
+                    self.Fhkl_obs = open_flex(args.Fobs).as_amplitude_array()
+                    self.Fhkl_ref = open_flex(args.Fref).as_amplitude_array()  # this reference miller array is used to track CC and R-factor
+
                     if args.p9:
                         wavelen = 0.9793
-                        from cxid9114.sf.struct_fact_special import load_p9
-                        Fhkl_guess = load_p9()
+                        #from cxid9114.sf.struct_fact_special import load_p9
+                        #Fhkl_guess = load_p9()
+                        raise NotImplementedError()
                     elif args.bs7 or args.bs7real:
                         from cxid9114.parameters import WAVELEN_HIGH
-                        from cxid9114.sf import struct_fact_special
-                        import os
+                        #from cxid9114.sf import struct_fact_special
+                        #import os
                         wavelen = WAVELEN_HIGH
-                        Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH, 
-                            os.path.join(sf_path, "../sim/4bs7.pdb"), 
-                            yb_scatter_name=os.path.join(sf_path, "../sf/scanned_fp_fdp.npz"))
+                        #Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH,
+                        #    os.path.join(sf_path, "../sim/4bs7.pdb"),
+                        #    yb_scatter_name=os.path.join(sf_path, "../sf/scanned_fp_fdp.npz"))
                     else:
                         from cxid9114.parameters import WAVELEN_LOW
                         wavelen = WAVELEN_LOW
-                        from cxid9114.sf.struct_fact_special import load_4bs7_sf
-                        Fhkl_guess = load_4bs7_sf()
+                        #from cxid9114.sf.struct_fact_special import load_4bs7_sf
+                        #Fhkl_guess = load_4bs7_sf()
+                        raise NotImplementedError()
 
                     if not args.bs7real:
                         spectrum = [(wavelen, fluxes[0])]
                     # end if sad
-                self.initialize_simulator(C, B, spectrum, Fhkl_guess.as_amplitude_array())
+                self.initialize_simulator(C, B, spectrum, self.Fhkl_obs)
 
             # map the miller array to ASU
             Hi_asu = map_hkl_list(Hi, self.anomalous_flag, self.symbol)
@@ -713,9 +721,6 @@ class FatData:
         self.asu_from_idx = {i: h for i, h in enumerate(set(self.Hi_asu_all_ranks))}
 
     def refine(self):
-        init_gain = 1
-        if args.gainrefine:
-            init_gain = 1.2
         self.RUC = FatRefiner(
             n_total_params=self.n_total_unknowns,
             n_local_params=self.n_local_unknowns,
@@ -731,14 +736,15 @@ class FatData:
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
             all_crystal_scales=self.all_crystal_scales,
-            init_gain=init_gain,
+            #init_scale=sqrt(self.SIM.D.spot_scale),
             perturb_fcell=args.perturbfcell)
 
         # plot things
         self.RUC.debug = args.debug
         self.RUC.binner_dmax = 999
         self.RUC.binner_dmin = 2
-        self.RUC.binner_nbin = 10
+        self.RUC.binner_nbins = 10
+        self.RUC.Fref = self.Fhkl_ref
 
         self.RUC.plot_images = args.plot
         self.RUC.plot_fcell = args.plotfcell
@@ -746,10 +752,10 @@ class FatData:
         self.RUC.plot_statistics = args.plotstats
         self.RUC.setup_plots()
 
-        self.RUC.log_fcells =True
+        self.RUC.log_fcells = True
 
-        if args.perturblist is not None:
-            self.RUC._hacked_fcells = range(args.perturblist)
+        #if args.perturblist is not None:
+        #    self.RUC._hacked_fcells = range(args.perturblist)
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
         self.RUC.request_diag_once = False
@@ -760,7 +766,6 @@ class FatData:
         self.RUC.trad_conv = True
         self.RUC.fcell_bump = args.fcellbump
         self.RUC.refine_detdist = False
-        self.RUC.refine_background_planes = False
         self.RUC.S.D.update_oversample_during_refinement = False
         self.RUC.refine_Umatrix = args.umatrix
         self.RUC.refine_Fcell = args.fcell
@@ -876,7 +881,3 @@ if args.loadonly:
 B.refine()
 comm.Barrier()
 B.print_results()
-
-if comm.rank == 0:
-    from IPython import embed
-    embed()
