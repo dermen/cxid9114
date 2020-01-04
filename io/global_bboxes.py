@@ -27,7 +27,7 @@ if rank == 0:
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
-    parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2'], default=None, 
+    parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2', 'syl3'], default=None,
         help="different refinements")
     parser.add_argument("--readoutless",action="store_true")
     parser.add_argument("--plot", action='store_true')
@@ -264,7 +264,7 @@ class FatData:
             self.SIM.D.spot_scale = 12
 
         if args.character is not None:
-            if args.character == "rock" or args.character == "syl" or args.character == "syl2":
+            if args.character in ["rock", "syl", "syl2", "syl3", "kaladin"]:
                 self.SIM.D.spot_scale = 1150
 
     def _process_miller_data(self):
@@ -879,5 +879,6 @@ if args.loadonly:
     comm.Abort()
 
 B.refine()
-comm.Barrier()
-B.print_results()
+#comm.Barrier()
+#B.print_results()
+
