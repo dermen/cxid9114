@@ -266,6 +266,7 @@ class FatData:
         if args.character is not None:
             if args.character in ["rock", "syl", "syl2", "syl3", "kaladin"]:
                 self.SIM.D.spot_scale = 1150
+                self.SIM.D.polarization = .999
 
     def _process_miller_data(self):
         idx, data = self.SIM.D.Fhkl_tuple
