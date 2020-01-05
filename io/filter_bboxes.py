@@ -25,7 +25,7 @@ if rank == 0:
     parser.add_argument("--reshigh", type=float, default=2.5, help="high res limit for selecting bboxes")
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
     parser.add_argument("--tiltfilt", default=None, type=float, help="minimum rms for the tilt plane fit")
-    parser.add_argument("--tilterrmin", default=None, type=float, help="minimum bg plane parameter variance")
+    parser.add_argument("--tilterrmax", default=None, type=float, help="minimum bg plane parameter variance")
     parser.add_argument("--onboundary", action="store_true", help="include spots that are close to the panel boundary")
     parser.add_argument("--notindexed", action="store_true", help="include spots that were flagged as not indexed")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
@@ -151,8 +151,8 @@ def main():
         if args.p9:
             reso = 1 / sqrt((hi ** 2 + ki ** 2) / 114 / 114 + li ** 2 / 32.5 / 32.5)
         else:
+            # TODO: why does 0,0,0 ever appear as a reflection ? Should never happen...
             reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
-
         in_reso_ring = array([resmin < d < resmax for d in reso])
 
         # Dirty integrater, sets integration region as disk of diameter 2*int_radius pixels
@@ -186,9 +186,9 @@ def main():
                 is_a_keeper = [k and rms < args.tiltfilt for k, rms in zip(is_a_keeper, tilt_rms)]
 
         if "tilt_error" in hgroups:
-            if args.tilterrmin is not None:
+            if args.tilterrmax is not None:
                 tilt_err = h["tilt_error"]["shot%d" % shot_idx][()]
-                is_a_keeper = [k and err <= args.tilterrmin for k, err in zip(is_a_keeper, tilt_err)]
+                is_a_keeper = [k and err <= args.tilterrmax for k, err in zip(is_a_keeper, tilt_err)]
         else:
             if rank == 0:
                 print ("WARNING: tilt_error not in hdf5 file")

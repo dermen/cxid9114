@@ -37,6 +37,7 @@ if rank == 0:
     parser.add_argument("--gainval", default=28, type=float)
     parser.add_argument("--curseoftheblackpearl", action="store_true")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
+    parser.add_argument("--rotscale", default=1, type=float)
     parser.add_argument("--noiseless", action="store_true")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
@@ -45,6 +46,7 @@ if rank == 0:
     parser.add_argument("--maxcalls", type=int, default=30000)
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
+    parser.add_argument("--globalNcells", action="store_true")
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--bg", action="store_true")
@@ -203,6 +205,7 @@ class FatData:
         self.n_ucell_param = 2  # tetragonal cell
         self.Nload = args.nload  #
         self.all_pix = 0
+        self.global_ncells_param = args.globalNcells
         self.time_load_start = 0
         self.fnames = []  # the filenames containing the datas
         self.per_image_refine_first = args.perimage  # do a per image refinement of crystal model prior to doing the global fat
@@ -498,7 +501,12 @@ class FatData:
             #exit()
             fluxes *= es  # multiply by the exposure time
             # TODO: wavelens should come from the imageset file itself
-            wavelens = data["wavelengths"][()]
+            if "wavelengths" in data.keys():
+                wavelens = data["wavelengths"][()]
+            elif args.bs7 or args.bs7real:
+                from cxid9114.parameters import WAVELEN_HIGH
+                wavelens = [WAVELEN_HIGH]
+
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
@@ -645,8 +653,15 @@ class FatData:
         n_scale_param = 1
         # TODO background refine
         # NOTE: n_param_per_image is no longer a constant when we refine background planes (unless we do a per-image polynomial fit background plane model)
-        n_param_per_image = [n_rot_param + n_ncell_param + n_scale_param + 3*n_spot_per_image[i]
-                             for i in range(n_images)]
+
+        #NOTE: ncells param
+        if self.global_ncells_param:
+            n_param_per_image = [n_rot_param + n_scale_param + 3*n_spot_per_image[i]
+                                 for i in range(n_images)]
+        else:
+            n_param_per_image = [n_rot_param + n_ncell_param + n_scale_param + 3*n_spot_per_image[i]
+                                 for i in range(n_images)]
+
         #n_param_per_image = n_rot_param + n_ncell_param + n_scale_param
         self.n_param_per_image = n_param_per_image
 
@@ -674,9 +689,13 @@ class FatData:
             total_local_unknowns = None
 
         self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
-        self.n_global_params = 2 + self.n_ucell_param + self.num_hkl_global  # detdist and gain + ucell params
-        self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
 
+        #NOTE: ncells param
+        if self.global_ncells_param:
+            self.n_global_params = 2 + self.n_ucell_param + n_ncell_param + self.num_hkl_global  # detdist and gain + ucell params
+        else:
+            self.n_global_params = 2 + self.n_ucell_param + self.num_hkl_global  # detdist and gain + ucell params
+        self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
         comm.Barrier()
         if comm.rank == 0:
             print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
@@ -738,13 +757,15 @@ class FatData:
             shot_panel_ids=self.all_panel_ids,
             all_crystal_scales=self.all_crystal_scales,
             #init_scale=sqrt(self.SIM.D.spot_scale),
-            perturb_fcell=args.perturbfcell)
+            perturb_fcell=args.perturbfcell,
+            global_ncells=args.globalNcells)
 
         # plot things
         self.RUC.debug = args.debug
         self.RUC.binner_dmax = 999
         self.RUC.binner_dmin = 2
         self.RUC.binner_nbins = 10
+        self.RUC.rot_scale = args.rotscale  # TODO make this work
         self.RUC.Fref = self.Fhkl_ref
 
         self.RUC.plot_images = args.plot
