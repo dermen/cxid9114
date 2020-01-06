@@ -898,8 +898,9 @@ comm.Barrier()
 B.tally_statistics()
 
 if args.loadonly:
+    comm.Barrier()
     comm.Abort()
-
+comm.Barrier()
 B.refine()
 #comm.Barrier()
 #B.print_results()
