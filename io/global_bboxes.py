@@ -1,4 +1,5 @@
 #!/usr/bin/env libtbx.python
+import cProfile
 
 try:
     from mpi4py import MPI
@@ -47,6 +48,8 @@ if rank == 0:
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--globalNcells", action="store_true")
+    parser.add_argument("--scaleR1", action="store_true")
+
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--bg", action="store_true")
@@ -62,6 +65,7 @@ if rank == 0:
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--forcemono", action='store_true')
+    parser.add_argument("--unknownscale", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--fcellbump", default=0.1, type=float)
     parser.add_argument("--oversample", default=0, type=int)
@@ -220,6 +224,7 @@ class FatData:
         self.all_yrel = {}
         self.all_Hi_asu = {}
         self.all_crystal_scales = {}
+        self.log_of_init_crystal_scales = {}
         self.all_Hi = {}
         self.all_nanoBragg_rois = {}
         self.SIM = None  # simulator; one per rank!
@@ -268,8 +273,11 @@ class FatData:
 
         if args.character is not None:
             if args.character in ["rock", "syl", "syl2", "syl3", "kaladin"]:
-                self.SIM.D.spot_scale = 1150
-                self.SIM.D.polarization = .999
+                if args.unknownscale:
+                    self.SIM.D.spot_scale = 1
+                else:
+                    self.SIM.D.spot_scale = 1150
+                    self.SIM.D.polarization = .999
 
     def _process_miller_data(self):
         idx, data = self.SIM.D.Fhkl_tuple
@@ -361,6 +369,8 @@ class FatData:
         my_shots = shots_for_rank[rank]
         if self.Nload is not None:
             my_shots = my_shots[:self.Nload]
+        print("Rank %d: I will load %d shots, first shot: %s, last shot: %s"
+              % (comm.rank, len(my_shots), my_shots[0], my_shots[-1]))
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
@@ -378,10 +388,6 @@ class FatData:
             npz_path = h["h5_path"][shot_idx]
             if args.character is not None:
                 npz_path = npz_path.replace("rock", args.character)
-            if args.testmode2:
-                import os
-                npz_path = npz_path.split("d9114_sims/")[1]
-                npz_path = os.path.join("/Users/dermen/", npz_path)
             if args.noiseless:
                 noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
                 img_handle = numpy_load(noiseless_path)
@@ -598,8 +604,8 @@ class FatData:
             #mem = mem / 1e6  # convert to GB
             mem = self._usage()
 
-            print "RANK %d: %.2g total pixels in %d/%d bboxes (file %d / %d); MemUsg=%2.2g GB" \
-                  % (rank, Ntot, len(bboxes), n_bboxes_total,  img_num +1, len(my_shots), mem)
+            #print "RANK %d: %.2g total pixels in %d/%d bboxes (file %d / %d); MemUsg=%2.2g GB" \
+            #      % (rank, Ntot, len(bboxes), n_bboxes_total,  img_num +1, len(my_shots), mem)
             self.all_pix += Ntot
 
             # TODO: accumulate per-shot information
@@ -609,6 +615,7 @@ class FatData:
             self.all_ucell_mans[img_num] = ucell_man
             self.all_spectra[img_num] = spectrum
             self.all_crystal_models[img_num] = C
+            self.log_of_init_crystal_scales[img_num] = 0  # these should be the log of the initial crystal scale
             self.all_crystal_scales[img_num] = xtal_scale_truth
             self.all_crystal_GT[img_num] = C_tru
             self.all_xrel[img_num] = xrel
@@ -624,7 +631,7 @@ class FatData:
         for h in my_open_files.values():
             h.close()
 
-        print ("Rank %d; all subimages loaded!" % rank)
+        #print ("Rank %d; all subimages loaded!" % rank)
 
     def _usage(self):
         mem = getrusage(RUSAGE_SELF).ru_maxrss  # peak mem usage in KB
@@ -673,14 +680,13 @@ class FatData:
 
         mem = self._usage()
 
-        print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
-              % (comm.rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
-
+        #print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
+        #      % (comm.rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
         n_images = comm.reduce(n_images, MPI.SUM, root=0)
         n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
         total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
         # Gather so that each rank knows how many local unknowns on each rank
-        local_unknowns_per_rank = comm.gather(total_per_image_unknowns, root=0)
+        local_unknowns_per_rank = comm.gather(total_per_image_unknowns)
         mem_tot = comm.reduce(mem, MPI.SUM, root=0)
 
         if comm.rank == 0:
@@ -723,7 +729,7 @@ class FatData:
             H += B.all_Hi[i]
             Hasu += B.all_Hi_asu[i]
 
-        print("Rank %d: Num miller vars on rank=%d" % (comm.rank, len(set(Hasu))))
+        #print("Rank %d: Num miller vars on rank=%d" % (comm.rank, len(set(Hasu))))
 
         Hi_all_ranks = comm.reduce(H, root=0)  # adding python lists concatenates them
         self.Hi_all_ranks = comm.bcast(Hi_all_ranks, root=0)
@@ -755,8 +761,8 @@ class FatData:
             shot_asu=self.all_Hi_asu,
             global_param_idx_start=self.local_unknowns_across_all_ranks,
             shot_panel_ids=self.all_panel_ids,
+            log_of_init_crystal_scales=self.log_of_init_crystal_scales,
             all_crystal_scales=self.all_crystal_scales,
-            #init_scale=sqrt(self.SIM.D.spot_scale),
             perturb_fcell=args.perturbfcell,
             global_ncells=args.globalNcells)
 
@@ -780,6 +786,7 @@ class FatData:
         #    self.RUC._hacked_fcells = range(args.perturblist)
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
+        self.RUC.scale_r1 = args.scaleR1
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
         self.RUC.restart_file = args.restartfile
@@ -890,6 +897,9 @@ class FatData:
         #    pass
 
 
+####pr = cProfile.Profile()
+####pr.enable()
+
 B = FatData()
 fnames = glob(args.glob)
 B.fnames = fnames
@@ -897,11 +907,26 @@ B.load()
 comm.Barrier()
 B.tally_statistics()
 
-if args.loadonly:
-    comm.Barrier()
-    comm.Abort()
+
+
+##print("Rank %d made it" % comm.rank)
+#import time
+#time.sleep(2)
+#if args.loadonly:
+#    comm.Barrier()
+#    comm.Abort()
 comm.Barrier()
 B.refine()
+
+#pr.disable()
+#
+#pr.dump_stats('cpu_%d.prof' %comm.rank)
+## - for text dump
+#with open( 'cpu_%d.txt' %comm.rank, 'w') as output_file:
+#    sys.stdout = output_file
+#    pr.print_stats(sort='time')
+#    sys.stdout = sys.__stdout__
+
 #comm.Barrier()
 #B.print_results()
 
