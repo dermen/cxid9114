@@ -30,7 +30,7 @@ if rank == 0:
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2', 'syl3'], default=None,
         help="different refinements")
-    parser.add_argument("--readoutless",action="store_true")
+    parser.add_argument("--readoutless", action="store_true")
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--Ncells_size", default=30, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
@@ -40,6 +40,7 @@ if rank == 0:
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--rotscale", default=1, type=float)
     parser.add_argument("--noiseless", action="store_true")
+    parser.add_argument("--optoutname", type=str, default=None)
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
@@ -49,7 +50,8 @@ if rank == 0:
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--globalNcells", action="store_true")
     parser.add_argument("--scaleR1", action="store_true")
-
+    parser.add_argument("--usepreoptAmat", action="store_true")
+    parser.add_argument("--usepreoptscale", action="store_true")
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--bg", action="store_true")
@@ -61,24 +63,29 @@ if rank == 0:
     parser.add_argument("--boopi", type=int, default=0)
     parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
+    parser.add_argument("--loadstart", type=int, default=None)
+    parser.add_argument("--loadstop", type=int, default=None)
+    parser.add_argument("--ngroups", type=int, default=1)
+    parser.add_argument("--groupId", type=int, default=0)
     parser.add_argument("--perimage", action="store_true")
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--forcemono", action='store_true')
     parser.add_argument("--unknownscale", action='store_true')
+    parser.add_argument("--printallmissets", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--fcellbump", default=0.1, type=float)
+    parser.add_argument("--initpickle", default=None, type=str, help="path to a pandas pkl file containing optimized parameters")
     parser.add_argument("--oversample", default=0, type=int)
     parser.add_argument("--hack", action="store_true", help="use the local 6 tester files")
     parser.add_argument("--curvatures", action='store_true')
     parser.add_argument("--startwithtruth", action='store_true')
-    parser.add_argument("--startwithopt", action="store_true")
     parser.add_argument("--testmode2", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--partition", action="store_true")
     parser.add_argument("--partitiontime", default=5, type=float, help="seconds allowed for partitioning inputs")
     parser.add_argument("--Fobs", type=str, required=True)
-    parser.add_argument("--Fref", type=str, required=True)
+    parser.add_argument("--Fref", type=str, default=None)
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
     parser.add_argument("--umatrix", action="store_true")
@@ -129,6 +136,7 @@ if rank == 0:
     data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
     from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW
     import numpy as np
+    np_log = np.log
     # grab the structure factors at the edge energy (ENERGY_LOW=8944 eV)
     edge_idx = np.abs(data_energies -ENERGY_LOW).argmin()
     Fhkl_guess = data_sf[edge_idx]
@@ -138,6 +146,7 @@ if rank == 0:
 
 else:
     np_indices = None
+    np_log = None
     sf_path = None
     diff_rot = None
     compare_with_ground_truth = None
@@ -168,6 +177,7 @@ if has_mpi:
     #FatRefiner = comm.bcast(FatRefiner, root=0)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel)
     np_indices = comm.bcast(np_indices, root=0)
+    np_log = comm.bcast(np_log, root=0)
     glob = comm.bcast(glob, root=0)
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
@@ -214,11 +224,13 @@ class FatData:
         self.fnames = []  # the filenames containing the datas
         self.per_image_refine_first = args.perimage  # do a per image refinement of crystal model prior to doing the global fat
         self.all_spot_roi = {}  # one list per shot, rois are x1,x2,y1,y2 per reflection
+        self.global_image_id = {}  # gives a  unique ID for each image so multiple ranks can process roi from same image
         self.all_abc_inits = {}  # one list per shot, abc_inits are a,b,c per reflection
         self.all_panel_ids = {}  # one list per shot, panel_ids are single number per reflection
         self.all_ucell_mans = {}  # one per shot, UcellManager instance (Tetragonal in this case)
         self.all_spectra = {}  # one list of (wavelength, flux) tuples per shot
         self.all_crystal_models = {}
+        self.all_shot_idx = {}
         self.all_crystal_GT = {}
         self.all_xrel = {}
         self.all_yrel = {}
@@ -274,7 +286,7 @@ class FatData:
         if args.character is not None:
             if args.character in ["rock", "syl", "syl2", "syl3", "kaladin"]:
                 if args.unknownscale:
-                    self.SIM.D.spot_scale = 1
+                    self.SIM.D.spot_scale = 17884  # determined from refinement using the syl3 starting model
                 else:
                     self.SIM.D.spot_scale = 1150
                     self.SIM.D.polarization = .999
@@ -341,8 +353,10 @@ class FatData:
             else:
                 print ("Proceeding without partitioning")
 
+            # optional to divide into a sub group
+            shot_tuples = array_split(shot_tuples, args.ngroups)[args.groupId]
             shots_for_rank = array_split(shot_tuples, size)
-            import os # FIXME, I thought I was imported already!
+            import os  # FIXME, I thought I was imported already!
             if args.outdir is not None:  # save for a fast restart (shot order is important!)
                 np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
             if args.restartfile is not None:
@@ -368,21 +382,24 @@ class FatData:
 
         my_shots = shots_for_rank[rank]
         if self.Nload is not None:
-            my_shots = my_shots[:self.Nload]
+            start = 0
+            if args.loadstart is not None:
+                start = args.loadstart
+            my_shots = my_shots[start: start+self.Nload]
         print("Rank %d: I will load %d shots, first shot: %s, last shot: %s"
               % (comm.rank, len(my_shots), my_shots[0], my_shots[-1]))
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
         my_unique_fids = set([fidx for fidx, _ in my_shots])
-        my_open_files = {fidx: h5py_File(self.fnames[fidx], "r") for fidx in my_unique_fids}
+        self.my_open_files = {fidx: h5py_File(self.fnames[fidx], "r") for fidx in my_unique_fids}
         Ntot = 0
 
         for img_num, (fname_idx, shot_idx) in enumerate(my_shots):
             #if img_num == args.Nmax:
             #    # print("Already processed maximum number images!")
             #    continue
-            h = my_open_files[fname_idx]
+            h = self.my_open_files[fname_idx]
 
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
@@ -402,15 +419,19 @@ class FatData:
                 img_handle = numpy_load(npz_path)
 
             img = img_handle["img"]
-
             if len(img.shape) == 2:  # if single panel
                 img = array([img])
 
             # D = det_from_dict(img_handle["det"][()])
             B = beam_from_dict(img_handle["beam"][()])
 
+            log_init_crystal_scale = 0  # default
+            if args.usepreoptscale:
+                log_init_crystal_scale = h["crystal_scale_preopt"][shot_idx]
             # get the indexed crystal Amatrix
             Amat = h["Amatrices"][shot_idx]
+            if args.usepreoptAmat:
+                Amat = h["Amatrices_preopt"][shot_idx]
             amat_elems = list(sqr(Amat).inverse().elems)
             # real space basis vectors:
             a_real = amat_elems[:3]
@@ -419,17 +440,6 @@ class FatData:
 
             # dxtbx indexed crystal model
             C = Crystal(a_real, b_real, c_real, "P43212")
-
-            ## NOTE: this is a temporary hack
-            if args.startwithopt:
-                assert args.hack
-                f_basename = os.path.basename(npz_path)
-                crystal_dir = "/Users/dermen/crystal/modules/cxid9114/io/crystals/"
-                crystal_name = crystal_dir + "/%s_refined.npy" % f_basename
-                assert os.path.exists(crystal_name), "Crystal file non existent"
-                refined_Amat = np_load(crystal_name)
-                C.set_A(tuple(refined_Amat))
-            ## NOTE end hack
 
             # change basis here ? Or maybe just average a/b
             a, b, c, _, _, _ = C.get_unit_cell().parameters()
@@ -523,6 +533,7 @@ class FatData:
             # make a unit cell manager that the refiner will use to track the B-matrix
             aa, _, cc, _, _, _ = C_tru.get_unit_cell().parameters()
             ucell_man = TetragonalManager(a=a_init, c=c_init)
+
             if args.startwithtruth:
                 ucell_man = TetragonalManager(a=aa, c=cc)
 
@@ -533,7 +544,9 @@ class FatData:
             if img_num == 0:  # only initialize the simulator after loading the first image
                 if args.sad:
                     self.Fhkl_obs = open_flex(args.Fobs).as_amplitude_array()
-                    self.Fhkl_ref = open_flex(args.Fref).as_amplitude_array()  # this reference miller array is used to track CC and R-factor
+                    self.Fhkl_ref = args.Fref
+                    if args.Fref is not None:
+                        self.Fhkl_ref = open_flex(args.Fref).as_amplitude_array()  # this reference miller array is used to track CC and R-factor
 
                     if args.p9:
                         wavelen = 0.9793
@@ -608,14 +621,15 @@ class FatData:
             #      % (rank, Ntot, len(bboxes), n_bboxes_total,  img_num +1, len(my_shots), mem)
             self.all_pix += Ntot
 
-            # TODO: accumulate per-shot information
+            # accumulate per-shot information
+            self.global_image_id[img_num] = None  # TODO
             self.all_spot_roi[img_num] = bboxes
             self.all_abc_inits[img_num] = tilt_abc
             self.all_panel_ids[img_num] = panel_ids
             self.all_ucell_mans[img_num] = ucell_man
             self.all_spectra[img_num] = spectrum
             self.all_crystal_models[img_num] = C
-            self.log_of_init_crystal_scales[img_num] = 0  # these should be the log of the initial crystal scale
+            self.log_of_init_crystal_scales[img_num] = log_init_crystal_scale  # these should be the log of the initial crystal scale
             self.all_crystal_scales[img_num] = xtal_scale_truth
             self.all_crystal_GT[img_num] = C_tru
             self.all_xrel[img_num] = xrel
@@ -627,8 +641,9 @@ class FatData:
             self.all_Hi[img_num] = Hi
             self.all_Hi_asu[img_num] = Hi_asu
             self.all_proc_idx[img_num] = proc_file_idx
+            self.all_shot_idx[img_num] = shot_idx  # this is the index of the shot in the process*h5 file
 
-        for h in my_open_files.values():
+        for h in self.my_open_files.values():
             h.close()
 
         #print ("Rank %d; all subimages loaded!" % rank)
@@ -658,18 +673,13 @@ class FatData:
         n_rot_param = 3
         n_ncell_param = 1
         n_scale_param = 1
-        # TODO background refine
         # NOTE: n_param_per_image is no longer a constant when we refine background planes (unless we do a per-image polynomial fit background plane model)
-
-        #NOTE: ncells param
         if self.global_ncells_param:
             n_param_per_image = [n_rot_param + n_scale_param + 3*n_spot_per_image[i]
                                  for i in range(n_images)]
         else:
             n_param_per_image = [n_rot_param + n_ncell_param + n_scale_param + 3*n_spot_per_image[i]
                                  for i in range(n_images)]
-
-        #n_param_per_image = n_rot_param + n_ncell_param + n_scale_param
         self.n_param_per_image = n_param_per_image
 
         # TODO background refine
@@ -679,12 +689,11 @@ class FatData:
         self.n_local_unknowns = total_per_image_unknowns
 
         mem = self._usage()
-
-        #print("RANK%d: images=%d, spots=%d, pixels=%d, unknowns=%d, usage=%2.2g GigBy"
-        #      % (comm.rank, n_images, n_spot_tot, total_pix, total_per_image_unknowns, mem))
+        # note: roi para
         n_images = comm.reduce(n_images, MPI.SUM, root=0)
         n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
         total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
+
         # Gather so that each rank knows how many local unknowns on each rank
         local_unknowns_per_rank = comm.gather(total_per_image_unknowns)
         mem_tot = comm.reduce(mem, MPI.SUM, root=0)
@@ -696,12 +705,13 @@ class FatData:
 
         self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
 
-        #NOTE: ncells param
         if self.global_ncells_param:
             self.n_global_params = 2 + self.n_ucell_param + n_ncell_param + self.num_hkl_global  # detdist and gain + ucell params
         else:
             self.n_global_params = 2 + self.n_ucell_param + self.num_hkl_global  # detdist and gain + ucell params
+
         self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
+
         comm.Barrier()
         if comm.rank == 0:
             print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
@@ -747,154 +757,208 @@ class FatData:
         self.asu_from_idx = {i: h for i, h in enumerate(set(self.Hi_asu_all_ranks))}
 
     def refine(self):
-        self.RUC = FatRefiner(
-            n_total_params=self.n_total_unknowns,
-            n_local_params=self.n_local_unknowns,
-            n_global_params=self.n_global_params,
-            local_idx_start=self.starts_per_rank[comm.rank],
-            shot_ucell_managers=self.all_ucell_mans,
-            shot_rois=self.all_spot_roi,
-            shot_nanoBragg_rois=self.all_nanoBragg_rois,
-            shot_roi_imgs=self.all_roi_imgs, shot_spectra=self.all_spectra,
-            shot_crystal_GTs=self.all_crystal_GT, shot_crystal_models=self.all_crystal_models,
-            shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
-            shot_asu=self.all_Hi_asu,
-            global_param_idx_start=self.local_unknowns_across_all_ranks,
-            shot_panel_ids=self.all_panel_ids,
-            log_of_init_crystal_scales=self.log_of_init_crystal_scales,
-            all_crystal_scales=self.all_crystal_scales,
-            perturb_fcell=args.perturbfcell,
-            global_ncells=args.globalNcells)
 
-        # plot things
-        self.RUC.debug = args.debug
-        self.RUC.binner_dmax = 999
-        self.RUC.binner_dmin = 2
-        self.RUC.binner_nbins = 10
-        self.RUC.rot_scale = args.rotscale  # TODO make this work
-        self.RUC.Fref = self.Fhkl_ref
+        trials = {"fcell": [False, False, True],
+                  "scale": [True, False, True],
+                  "umatrix": [False, True, False],
+                  "bmatrix": [False, True, False],
+                  "ncells": [True, False, True],
+                  "bg": [False, False, True],
+                  "oversample:": [1, 1, 0],  # note cant be reset
+                  "max_calls": [100, 50, 100]}
 
-        self.RUC.plot_images = args.plot
-        self.RUC.plot_fcell = args.plotfcell
-        self.RUC.plot_residuals = args.residual
-        self.RUC.plot_statistics = args.plotstats
-        self.RUC.setup_plots()
+        trials = {"fcell": [False, False],
+                  "scale": [True, False],
+                  "umatrix": [False, True],
+                  "bmatrix": [False, True],
+                  "ncells": [True, False],
+                  "bg": [False, False],
+                  "max_calls": [5, 20]}
 
-        self.RUC.log_fcells = True
+        #trials = {"fcell": [True, False],
+        #          "scale": [False, False],
+        #          "umatrix": [False, True],
+        #          "bmatrix": [False, True],
+        #          "ncells": [False, False],
+        #          "bg": [False, False],
+        #          "max_calls": [5000, 20]}
 
-        #if args.perturblist is not None:
-        #    self.RUC._hacked_fcells = range(args.perturblist)
-        self.RUC.idx_from_asu = self.idx_from_asu
-        self.RUC.asu_from_idx = self.asu_from_idx
-        self.RUC.scale_r1 = args.scaleR1
-        self.RUC.request_diag_once = False
-        self.RUC.S = self.SIM
-        self.RUC.restart_file = args.restartfile
-        self.RUC.has_pre_cached_roi_data = True
-        self.RUC.split_evaluation = False
-        self.RUC.trad_conv = True
-        self.RUC.fcell_bump = args.fcellbump
-        self.RUC.refine_detdist = False
-        self.RUC.S.D.update_oversample_during_refinement = False
-        self.RUC.refine_Umatrix = args.umatrix
-        self.RUC.refine_Fcell = args.fcell
-        self.RUC.refine_Bmatrix = args.bmatrix
-        self.RUC.refine_ncells = args.ncells
-        self.RUC.refine_crystal_scale = args.scale
-        self.RUC.refine_background_planes = args.bg
-        self.RUC.refine_gain_fac = args.gainrefine
-        self.RUC.use_curvatures = False  # args.curvatures
-        self.RUC.calc_curvatures = args.curvatures
-        self.RUC.poisson_only = args.poissononly
-        self.RUC.plot_stride = args.stride
-        self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
-        self.RUC.max_calls = args.maxcalls
-        self.RUC.verbose = False
-        self.RUC.use_rot_priors = False
-        self.RUC.use_ucell_priors = False
-        self.RUC.filter_bad_shots = args.filterbad
-        self.RUC.FNAMES = self.all_fnames
-        self.RUC.PROC_FNAMES = self.all_proc_fnames
-        self.RUC.PROC_IDX = self.all_proc_idx
-        self.RUC.Hi = self.all_Hi
-        self.RUC.output_dir = args.outdir
+        Ntrials = len(trials["fcell"])
+        x_init = None
+        for i_trial in range(Ntrials):
+            self.RUC = FatRefiner(
+                n_total_params=self.n_total_unknowns,
+                n_local_params=self.n_local_unknowns,
+                n_global_params=self.n_global_params,
+                local_idx_start=self.starts_per_rank[comm.rank],
+                shot_ucell_managers=self.all_ucell_mans,
+                shot_rois=self.all_spot_roi,
+                shot_nanoBragg_rois=self.all_nanoBragg_rois,
+                shot_roi_imgs=self.all_roi_imgs, shot_spectra=self.all_spectra,
+                shot_crystal_GTs=self.all_crystal_GT, shot_crystal_models=self.all_crystal_models,
+                shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
+                shot_asu=self.all_Hi_asu,
+                global_param_idx_start=self.local_unknowns_across_all_ranks,
+                shot_panel_ids=self.all_panel_ids,
+                log_of_init_crystal_scales=self.log_of_init_crystal_scales,
+                all_crystal_scales=self.all_crystal_scales,
+                perturb_fcell=args.perturbfcell,
+                global_ncells=args.globalNcells)
 
-        if args.verbose:
-            if rank == 0:  # only show refinement stats for rank 0
-                self.RUC.verbose = True
+            self.RUC.refine_Bmatrix = trials["bmatrix"][i_trial]
+            self.RUC.refine_Umatrix = trials["umatrix"][i_trial]
+            self.RUC.refine_Fcell = trials["fcell"][i_trial]
+            self.RUC.refine_ncells = trials["ncells"][i_trial]
+            self.RUC.refine_background_planes = trials["bg"][i_trial]
+            self.RUC.refine_crystal_scale = trials["scale"][i_trial]
+            self.RUC.max_calls = trials["max_calls"][i_trial]
 
-        if args.tryscipy:
-            self.RUC.calc_curvatures = False
-            self.RUC._setup()
-            self.RUC.calc_func = True
-            self.RUC.compute_functional_and_gradients()
+            # plot things
+            self.RUC.debug = args.debug
+            self.RUC.binner_dmax = 999
+            self.RUC.binner_dmin = 2
+            self.RUC.binner_nbins = 10
+            self.RUC.trial_id = i_trial
+            self.RUC.print_all_missets = args.printallmissets
+            self.RUC.rot_scale = args.rotscale  # TODO make this work
+            self.RUC.Fref = self.Fhkl_ref
 
-            from scitbx.array_family import flex
-            def func(x, RUC):
-                RUC.calc_func = True
-                RUC.x = flex.double(x)
-                f, g = RUC.compute_functional_and_gradients()
-                return f
+            self.RUC.plot_images = args.plot
+            self.RUC.plot_fcell = args.plotfcell
+            self.RUC.plot_residuals = args.residual
+            self.RUC.plot_statistics = args.plotstats
+            self.RUC.setup_plots()
 
-            def fprime(x, RUC):
-                RUC.calc_func = False
-                RUC.x = flex.double(x)
-                RUC.x = flex.double(x)
-                f, g = RUC.compute_functional_and_gradients()
-                return g.as_numpy_array()
+            self.RUC.log_fcells = True
+            self.RUC.x_init = x_init
 
-            from scipy.optimize import fmin_l_bfgs_b
-            out = fmin_l_bfgs_b(func=func, x0=array(self.RUC.x),
-                                fprime=fprime, args=[self.RUC])
+            #if args.perturblist is not None:
+            #    self.RUC._hacked_fcells = range(args.perturblist)
+            self.RUC.idx_from_asu = self.idx_from_asu
+            self.RUC.asu_from_idx = self.asu_from_idx
+            self.RUC.scale_r1 = args.scaleR1
+            self.RUC.request_diag_once = False
+            self.RUC.S = self.SIM
+            self.RUC.restart_file = args.restartfile
+            self.RUC.has_pre_cached_roi_data = True
+            self.RUC.split_evaluation = False
+            self.RUC.trad_conv = True
+            self.RUC.fcell_bump = args.fcellbump
+            self.RUC.refine_detdist = False
+            self.RUC.S.D.update_oversample_during_refinement = False
+            # NOTE working in trial mode
+            #self.RUC.refine_Umatrix = args.umatrix
+            #self.RUC.refine_Fcell = args.fcell
+            #self.RUC.refine_Bmatrix = args.bmatrix
+            #self.RUC.refine_ncells = args.ncells
+            #self.RUC.refine_crystal_scale = args.scale
+            #self.RUC.refine_background_planes = args.bg
+            #self.RUC.max_calls = args.maxcalls
+            # NOTE working in trial mode
+            self.RUC.refine_gain_fac = False
+            self.RUC.use_curvatures = False  # args.curvatures
+            self.RUC.calc_curvatures = args.curvatures
+            self.RUC.poisson_only = args.poissononly
+            self.RUC.plot_stride = args.stride
+            self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
+            self.RUC.verbose = False
+            self.RUC.use_rot_priors = False
+            self.RUC.use_ucell_priors = False
+            self.RUC.filter_bad_shots = args.filterbad
+            self.RUC.FNAMES = self.all_fnames
+            self.RUC.PROC_FNAMES = self.all_proc_fnames
+            self.RUC.PROC_IDX = self.all_proc_idx
+            self.RUC.Hi = self.all_Hi
+            self.RUC.output_dir = args.outdir
 
-            #import climin
-            #opt = climin.Lbfgs(wrt=self.RUC.x.as_numpy_array(),
-            #   f=func, fprime=fprime, args=self.RUC)
-            #for info in opt:
-            #    print ()
+            if args.verbose:
+                if rank == 0:  # only show refinement stats for rank 0
+                    self.RUC.verbose = True
 
-        else:
-            self.RUC.run()
-            if self.RUC.hit_break_to_use_curvatures:
-                self.RUC.num_positive_curvatures = 0
-                self.RUC.use_curvatures = True
-                self.RUC.run(setup=False)
+            if args.tryscipy:
+                self.RUC.calc_curvatures = False
+                self.RUC._setup()
+                self.RUC.calc_func = True
+                self.RUC.compute_functional_and_gradients()
 
+                from scitbx.array_family import flex
+                def func(x, RUC):
+                    RUC.calc_func = True
+                    RUC.x = flex.double(x)
+                    f, g = RUC.compute_functional_and_gradients()
+                    return f
 
-    def print_results(self):
-        for i_shot in range(self.RUC.n_shots): # (angx, angy, angz, a,c) in enumerate(zip(rotx, roty, rotz, avals, cvals)):
+                def fprime(x, RUC):
+                    RUC.calc_func = False
+                    RUC.x = flex.double(x)
+                    RUC.x = flex.double(x)
+                    f, g = RUC.compute_functional_and_gradients()
+                    return g.as_numpy_array()
 
-            a_init, _, c_init, _, _, _ = self.RUC.CRYSTAL_MODELS[i_shot].get_unit_cell().parameters()
-            a_tru, b_tru, c_tru = self.RUC.CRYSTAL_GT[i_shot].get_real_space_vectors()
+                from scipy.optimize import fmin_l_bfgs_b
+                out = fmin_l_bfgs_b(func=func, x0=array(self.RUC.x),
+                                    fprime=fprime, args=[self.RUC])
+
+            else:
+                self.RUC.run()
+                if self.RUC.hit_break_to_use_curvatures:
+                    self.RUC.num_positive_curvatures = 0
+                    self.RUC.use_curvatures = True
+                    self.RUC.run(setup=False)
+
+                if comm.rank == 0:
+                    print ("<><><><><><><><><><><><><><><><>")
+                    print("<><><> END OF TRIAL %02d <><><><>" % (i_trial+1))
+                    print ("<><><><><><><><><><><><><><><><>")
+
+            x_init = self.RUC.x  # restart with these parameters next time
+
+        # Here we can save the refined parameters
+        my_shots = B.all_shot_idx.keys()
+        x = B.RUC.x
+        data_to_send = []
+        for i_shot in my_shots:
+            ang, ax = B.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
+            Bmat = B.RUC.get_refined_Bmatrix(i_shot)
+            C = B.RUC.CRYSTAL_MODELS[i_shot]
+            C.set_B(Bmat)
+            C.rotate_around_origin(ax, ang)
+            Amat_refined = C.get_A()
+
+            scale_xpos = B.RUC.spot_scale_xpos[i_shot]
+
+            log_crystal_scale = x[scale_xpos]
+            proc_h5_fname = B.all_proc_fnames[i_shot]
+            proc_h5_idx = B.all_shot_idx[i_shot]
+            data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined))
+
+        data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
+        if comm.rank == 0:
+            import pandas
+            fnames, shot_idx, log_scales, Amats = zip(*data_to_send)
+            df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx,
+                                   "log_scales": log_scales, "Amats": Amats})
+            opt_outname = "optimized_params.pkl"
+            if args.optoutname is not None:
+                opt_outname = args.optoutname
+            df.to_pickle(opt_outname)
+
+    def init_misset_results(self):
+        results = []
+        nshots = len(self.all_crystal_GT)
+        for i_shot in range(nshots): # (angx, angy, angz, a,c) in enumerate(zip(rotx, roty, rotz, avals, cvals)):
+
+            a_init, _, c_init, _, _, _ = self.all_crystal_models[i_shot].get_unit_cell().parameters()
+            a_tru, b_tru, c_tru = self.all_crystal_GT[i_shot].get_real_space_vectors()
             try:
                 angular_offset_init = compare_with_ground_truth(a_tru, b_tru, c_tru,
-                                                [self.RUC.CRYSTAL_MODELS[i_shot]],
+                                                [self.all_crystal_models[i_shot]],
                                                 symbol="P43212")[0]
             except Exception as err:
                 print("Rank %d img %d err %s" % (rank, i_shot, err))
-                continue
-
-            ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot) #anglesXYZ=(angx,angy,angz))
-            B = self.RUC.get_refined_Bmatrix(i_shot)
-            self.RUC.CRYSTAL_MODELS[i_shot].rotate_around_origin(ax, ang)
-            self.RUC.CRYSTAL_MODELS[i_shot].set_B(B)
-            a_ref, _, c_ref, _, _, _ = self.RUC.CRYSTAL_MODELS[i_shot].get_unit_cell().parameters()
-            # compute missorientation with ground truth model
-            tot_negs = sum([(roi < 0).sum() for roi in self.RUC.ROI_IMGS[i_shot]])
-            try:
-                angular_offset_ref = compare_with_ground_truth(a_tru, b_tru, c_tru,
-                                                               [self.RUC.CRYSTAL_MODELS[i_shot]],
-                                                               symbol="P43212")[0]
-                print("Rank %d, file=%s, ang=%f, init_ang=%f, a=%f, init_a=%f, c=%f, init_c=%f, total_neg_pix=%d" % (
-                    rank, self.all_fnames[i_shot], angular_offset_ref, angular_offset_init, a_ref, a_init, c_ref, c_init, tot_negs))
-            except Exception as err:
-                print("Rank %d, file=%d, error %s" % (rank, i_shot, err))
-
-        # free the memory from diffBragg instance
-
-        #except AssertionError as err:
-        #    print("Rank %d, Hit assertion error during refinement: %s" % (comm.rank, err))
-        #    pass
+                angular_offset_init = -1
+            results.append(angular_offset_init)
+        return results
 
 
 ####pr = cProfile.Profile()
@@ -904,10 +968,15 @@ B = FatData()
 fnames = glob(args.glob)
 B.fnames = fnames
 B.load()
+ang_res = B.init_misset_results()
+
+ang_res = comm.reduce(ang_res, MPI.SUM, root=0)
+if comm.rank == 0:
+    miss = [a for a in ang_res if a > 0]
+    print("INITIAL MEDIAN misset = %f" % np.median(miss))
+
 comm.Barrier()
 B.tally_statistics()
-
-
 
 ##print("Rank %d made it" % comm.rank)
 #import time
@@ -917,6 +986,17 @@ B.tally_statistics()
 #    comm.Abort()
 comm.Barrier()
 B.refine()
+
+#proc_fnames_shots = [(B.all_proc_fnames[i], B.all_shot_idx[i]) for i in my_shots]
+
+
+#parameters =[
+#    (f, i, np.exp(x[B.RUC.spot_scale_xpos[i]]), x[B.RUC.rotX_xpos[i]], x[B.RUC.rotY_xpos[i]], x[B.RUC.rotZ_xpos[i]])
+#    for f, i in proc_fnames_shots]
+
+
+
+
 
 #pr.disable()
 #
