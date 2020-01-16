@@ -3,6 +3,10 @@
 GAIN = 28
 sigma_readout = 3
 
+nstrong_tot = 0
+bragg_hi = []
+stills_hi = []
+
 from argparse import ArgumentParser
 
 parser = ArgumentParser("Make prediction boxes")
@@ -28,9 +32,13 @@ parser.add_argument("--usegt", action="store_true")
 parser.add_argument("--show_params", action='store_true')
 parser.add_argument("--forcelambda", type=float, default=None)
 parser.add_argument("--noiseless", action="store_true")
+parser.add_argument("--imgdirname", type=str, default=None)
 parser.add_argument("--symbol", default="P43212", type=str)
 parser.add_argument("--sanityplots", action='store_true')
 args = parser.parse_args()
+
+nstills_pred = 0
+nbragg_pred = 0
 
 import glob
 import os
@@ -40,6 +48,7 @@ import numpy as np
 import h5py
 from scipy.ndimage.morphology import binary_dilation
 from IPython import embed
+from scipy.spatial import cKDTree
 
 from dxtbx.model.experiment_list import ExperimentListFactory, Experiment
 from cctbx import miller, sgtbx
@@ -71,11 +80,13 @@ if rank == 0:
     print(args)
     if args.sanityplots:
         import pylab as plt
+        fig = plt.figure(1)
+        ax = plt.gca()
 
 # Load in the reflection tables and experiment lists
 print ("Reading in the files")
 El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
-
+Rmaster = flex.reflection_table.from_file(args.filteredexpt.replace(".expt", ".refl"))
 Nexper = len(El)
 print ("Read int %d experiments" % Nexper)
 
@@ -103,7 +114,6 @@ if args.bgname is not None:
 
 writer = h5py.File(os.path.join(odir, "process_rank%d.h5" % rank), "w")
 
-
 n_processed = 0
 for i_shot in range(Nexper):
     
@@ -116,6 +126,9 @@ for i_shot in range(Nexper):
     Exper = El[i_shot] 
     iset = Exper.imageset
     fpath = iset.get_path(0)
+    if args.imgdirname is not None:
+        fpath = fpath.split("/kaladin/")[1]
+        fpath = os.path.join(args.imgdirname, fpath)
     # this is the file containing relevant simulation parameters..
     h5 = h5py.File(fpath.replace(".npz", ""), 'r')
     # get image pixels
@@ -196,10 +209,11 @@ for i_shot in range(Nexper):
         crystal, DET, BEAM, FF,
         energies,
         FLUX, pids=None, profile=profile, cuda=True, oversample=1,
-        Ncells_abc=Ncells_abc, mos_dom=50, mos_spread=0.02,
+        Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
         master_scale=1,
         exposure_s=exposure_s, beamsize_mm=beamsize, device_Id=device_Id,
         show_params=args.show_params, accumulate=False, crystal_size_mm=xtal_size)
+
 
     assert len(energies) == 1  # sanity check TODO remove
 
@@ -265,8 +279,59 @@ for i_shot in range(Nexper):
         bg = is_bg_pixel[i_panel, j1:j2, i1:i2]
         # update the background pixel selection with the expanded integration mask
         is_bg_pixel[i_panel, j1:j2, i1:i2] = ~np.logical_or(~bg, expanded_integration_mask)
+
     # At this point is_bg_pixel returns False for pixels that are inside the expanded strong spot mask
     # or the expanded integration mask
+    #if args.sanitycheck:
+    #    refl_i_f = refl_pkl.replace("_strong.refl", "_indexed.refl")
+    #    if not os.path.exists(refl_i_f):
+    #        raise IOError("Reflection indexed file  %s does not exist!" % refl_i_f)
+    #    R = utils.open_flex(refl_i_f)
+    #    Rpp = prediction_utils.refls_by_panelname(R)
+    #    for pid in Rpp:
+    #        bb_on_panel = np.array(bboxes)[np.array(bbox_panel_ids) == pid]
+
+    #        if args.plot is not None and rank == 0:
+    #            plt.figure(1)
+    #            plt.gcf().clear()
+    #            _dat = img_data[pid][img_data[pid] > 0]
+    #            m = _dat.mean()
+    #            s = _dat.std()
+    #            vmin = m-s
+    #            vmax = m+5*s
+    #            plt.imshow(img_data[pid], vmax=vmax, vmin=vmin, cmap='viridis')
+    #            nspots = len(bb_on_panel)
+    #            for i_spot in range(nspots):
+    #                x1, x2, y1, y2 = bb_on_panel[i_spot]
+    #                patch = plt.Rectangle(xy=(x1, y1), width=x2 - x1, height=y2 - y1, fc='none', ec='r')
+    #                plt.gca().add_patch(patch)
+    #            plt.title("Panel=%d" % pid)
+
+    #            # get the ground truth background plane and plot
+    #            if args.savefigdir is not None:
+    #                plt.savefig(os.path.join(args.savefigdir, "_figure%d.png" % pid))
+    #            plt.draw()
+    #            plt.pause(args.plot)
+
+    #        r_on_panel = Rpp[pid]
+    #        x, y, _ = prediction_utils.xyz_from_refl(r_on_panel)
+    #        x = np.array(x)-0.5
+    #        y = np.array(y)-0.5
+    #        Hi_on_panel = np.array(Hi)[np.array(bbox_panel_ids) == pid]
+
+    #        for i_spot, (x1, x2, y1, y2) in enumerate(bb_on_panel):
+    #            inX = np.logical_and(x1 < x, x < x2)
+    #            inY = np.logical_and(y1 < y, y < y2)
+    #            in_bb = inX & inY
+    #            if not any(in_bb):
+    #                continue
+
+    #            pos = np.where(in_bb)[0]
+    #            for p in pos:
+    #                h_pred_nb = Hi_on_panel[i_spot]
+    #                h_pred_stills = r_on_panel[p]["miller_index"]
+    #                print "panel:", pid, h_pred_nb, h_pred_stills
+    #    if args.savefigdir is not None:
 
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
     #   RUN THE TILT PLANE HELPER FUNCTION
@@ -279,7 +344,7 @@ for i_shot in range(Nexper):
     exper.detector = DET
     exper.beam = BEAM
     exper.crystal = crystal
-    exper.imageset = iset # Exper.imageset
+    exper.imageset = iset  # Exper.imageset
     results = tilt_fit(
         imgs=img_data, is_bg_pix=is_bg_pixel,
         delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
@@ -293,6 +358,92 @@ for i_shot in range(Nexper):
     Hi = np.vstack(refls_predict['miller_index'])
     did_i_index = np.array(refls_predict['id'])
     boundary_spot = np.array(refls_predict['boundary'])
+
+    int_refl_path = os.path.join(os.path.dirname(args.filteredexpt),
+                                 "idx-" + os.path.basename(fpath).replace(".h5.npz", ".h5_integrated.refl"))
+    _R_shot = flex.reflection_table.from_file(int_refl_path)
+    _R_shot_strong = Rmaster.select(Rmaster['id'] == i_shot)
+
+    nmismatch = 0
+    for _pid in range(len(DET)):
+        xstrong, ystrong = [], []
+        x0, y0 = [], []
+        x, y = [], []
+
+        rpp = prediction_utils.refls_by_panelname(refls_predict)
+        # get nanoBragg spot prediction positions
+        if _pid in rpp:
+            x, y, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(rpp[_pid]))
+
+        # get strong spot pos
+        _R_shot_strong_panel = _R_shot_strong.select(_R_shot_strong["panel"] == _pid)
+        if len(_R_shot_strong_panel) > 0:
+            xstrong, ystrong, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_shot_strong_panel))
+
+        # get stills process prediction positions
+        _R_panel = _R_shot.select(_R_shot["panel"] == _pid)
+        if len(_R_panel) > 0:
+            x0, y0, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_panel))
+
+        if list(x0) and list(x) and args.sanityplots:
+            m = img_data[_pid].mean()
+            s = img_data[_pid].std()
+            vmax = m + 4 * s
+            vmin = m - s
+
+            plt.figure(1)
+            ax = plt.gca()
+            ax.imshow(img_data[_pid], vmax=vmax, vmin=vmin)
+            for i in range(len(rpp[_pid])):
+                ax.text(x=x[i], y=y[i] - 10, s=str(rpp[_pid]["miller_index"][i]), color='w', size=14)
+            ax.plot(x, y, 'w^', ms=10, mfc='none')
+            for i in range(len(_R_panel)):
+                ax.text(x=x0[i], y=y0[i], s=str(_R_panel["miller_index"][i]), color='r', size=13)
+            ax.plot(x0, y0, 'rs', ms=10, mfc='none')
+            plt.plot(xstrong, ystrong, 'go')
+
+        if list(x0) and list(x):
+            tree = cKDTree(zip(x0, y0))
+            res = tree.query_ball_point(zip(x, y), r=0.9)
+            for i, r in enumerate(res):
+                if not r:
+                    continue
+                if len(r) > 1:
+                    continue
+                i_near = r[0]
+                miller_stills = _R_panel["miller_index"][i_near]
+                miller_nano = rpp[_pid]["miller_index"][i]
+                #print miller_stills, miller_nano
+                if miller_stills != miller_nano:
+                    nmismatch += 1
+                    print "Bad: %s, %s" % (str(miller_stills), str(miller_nano))
+
+
+    bragg_hi += map(tuple, Hi)
+    stills_hi += list(_R_shot["miller_index"])
+    bragg_hi = list(set(bragg_hi))
+    stills_hi = list(set(stills_hi))
+
+    nstills_tot = len(stills_hi)
+    nbragg_tot = len(bragg_hi)
+    nstrong_tot += len(_R_shot_strong)
+    #FIXME why is 0,0,0 being predicted using nanoBragg code??
+    if rank == 0:
+        print ("RANK %d, SHOT %d : nstrong=%d (%d overall), nstills_pred=%d, (%d unique overall) nbragg_pred=%d (%d unique overall), nmismatch=%d"
+               % (rank, i_shot, len(_R_shot_strong), nstrong_tot, len(_R_shot), nstills_tot, len(refls_predict), nbragg_tot, nmismatch))
+        #if has_mpi:
+        #    bragg_hi = comm.reduce(bragg_hi, MPI.SUM, root=0)
+        #    stills_hi = comm.reduce(stills_hi, MPI.SUM, root=0)
+
+        bragg_mset = miller.set(symm, flex.miller_index(bragg_hi), anomalous_flag=True)
+        bragg_mset.setup_binner(d_max=999, d_min=2, n_bins=10)
+        print("nanoBragg predictions:\n<><><><><><><><><><><><>")
+        bragg_mset.completeness(use_binning=True).show()
+
+        stills_mset = miller.set(symm, flex.miller_index(stills_hi), anomalous_flag=True)
+        stills_mset.setup_binner(d_max=999, d_min=2, n_bins=10)
+        print("Stills process predictions:\n<><><><><><><><><><><><>")
+        stills_mset.completeness(use_binning=True).show()
 
     # <><><><><><><><><><><><><><><>
     # DO THE SANITY PLOTS (OPTIONAL)

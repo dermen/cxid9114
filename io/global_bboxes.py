@@ -28,16 +28,18 @@ if rank == 0:
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
-    parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2', 'syl3'], default=None,
+    parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2', 'syl3', 'kaladin'], default=None,
         help="different refinements")
     parser.add_argument("--readoutless", action="store_true")
     parser.add_argument("--plot", action='store_true')
+    parser.add_argument("--fixrotZ", action='store_true')
     parser.add_argument("--Ncells_size", default=30, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--gainval", default=28, type=float)
     parser.add_argument("--curseoftheblackpearl", action="store_true")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
+    parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
     parser.add_argument("--noiseless", action="store_true")
     parser.add_argument("--optoutname", type=str, default=None)
@@ -45,16 +47,15 @@ if rank == 0:
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument('--filterbad', action='store_true')
-    parser.add_argument("--maxcalls", type=int, default=30000)
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
+    parser.add_argument("--xinitfile", type=str, default=None)
     parser.add_argument("--globalNcells", action="store_true")
     parser.add_argument("--scaleR1", action="store_true")
     parser.add_argument("--usepreoptAmat", action="store_true")
     parser.add_argument("--usepreoptscale", action="store_true")
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
-    parser.add_argument("--bg", action="store_true")
     parser.add_argument("--p9", action="store_true")
     parser.add_argument("--bs7", action="store_true")
     parser.add_argument("--bs7real", action="store_true")
@@ -88,11 +89,14 @@ if rank == 0:
     parser.add_argument("--Fref", type=str, default=None)
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
-    parser.add_argument("--umatrix", action="store_true")
-    parser.add_argument("--bmatrix", action="store_true")
-    parser.add_argument("--fcell", action="store_true")
-    parser.add_argument("--ncells", action="store_true")
-    parser.add_argument("--scale", action="store_true")
+    
+    parser.add_argument("--fcell", nargs="+", default=None, type=int)
+    parser.add_argument("--ncells", nargs="+", default=None, type=int)
+    parser.add_argument("--scale", nargs="+", default=None, type=int)
+    parser.add_argument("--umatrix", nargs="+", default=None, type=int)
+    parser.add_argument("--bmatrix", nargs="+", default=None, type=int)
+    parser.add_argument("--bg", nargs="+", default=None, type=int)
+    parser.add_argument("--maxcalls", nargs="+", required=True, type=int)
     parser.add_argument("--plotfcell", action="store_true")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
@@ -124,10 +128,11 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    #from cxid9114.geom.multi_panel import CSPAD_refined as CSPAD
     from cxid9114.geom.multi_panel import CSPAD
     from cctbx.array_family import flex
+    flex_double = flex.double
     from cctbx import sgtbx, miller
+    from cctbx.crystal import symmetry
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
@@ -149,6 +154,7 @@ else:
     np_log = None
     sf_path = None
     diff_rot = None
+    flex_double = None
     compare_with_ground_truth = None
     args = None
     RefineAllMultiPanel = None
@@ -179,6 +185,7 @@ if has_mpi:
     np_indices = comm.bcast(np_indices, root=0)
     np_log = comm.bcast(np_log, root=0)
     glob = comm.bcast(glob, root=0)
+    flex_double = comm.bcast(flex_double, root=0)
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
@@ -328,7 +335,7 @@ class FatData:
             print ("I am root. Number of uniques = %d" % len(set(shot_tuples)))
 
             # divide the array into chunks of roughly equal sum (total number of ROI)
-            if args.partition and args.restartfile is None:
+            if args.partition and args.restartfile is None and args.xinitfile is None:
                 diff = np.inf
                 roi_per = np.array(roi_per)
                 tstart = time.time()
@@ -365,7 +372,17 @@ class FatData:
                 print ("Loading shot mapping from dir %s" % dirname)
                 shots_for_rank = np.load(os.path.join(dirname, "shots_for_rank.npy"))
                 # propagate the shots for rank file...
-                np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
+                if args.outdir is not None:
+                    np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
+            if args.xinitfile is not None:
+                # the directory containing the restart file should have a shots for rank file
+                dirname = os.path.dirname(args.xinitfile)
+                print ("Loading shot mapping from dir %s" % dirname)
+                shots_for_rank = np.load(os.path.join(dirname, "shots_for_rank.npy"))
+                # propagate the shots for rank file...
+                if args.outdir is not None:
+                    np.save(os.path.join(args.outdir, "shots_for_rank"), shots_for_rank)
+            
             # close the open h5s..
             for h in h5s:
                 h.close()
@@ -391,8 +408,16 @@ class FatData:
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
+        import h5py
         my_unique_fids = set([fidx for fidx, _ in my_shots])
         self.my_open_files = {fidx: h5py_File(self.fnames[fidx], "r") for fidx in my_unique_fids}
+        #for fidx in my_unique_fids:
+        #    fpath = self.fnames[fidx]
+        #    if args.imgdirname is not None:
+        #        fpath = fpath.split("/kaladin/")[1]
+        #        fpath = os.path.join(args.imgdirname, fpath)
+        #    self.my_open_files[fidx] = h5py.File(fpath, "r")
+
         Ntot = 0
 
         for img_num, (fname_idx, shot_idx) in enumerate(my_shots):
@@ -403,11 +428,19 @@ class FatData:
 
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
-            if args.character is not None:
+
+            if args.imgdirname is not None:
+                import os
+                npz_path = npz_path.split("/kaladin/")[1]
+                npz_path = os.path.join(args.imgdirname, npz_path)
+
+            if args.character is not None:  # TODO what am I ?
                 npz_path = npz_path.replace("rock", args.character)
+
             if args.noiseless:
                 noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
                 img_handle = numpy_load(noiseless_path)
+
             elif args.readoutless:
                 import os
                 #readoutless_path = npz_path.split("tang/")[1]
@@ -419,6 +452,7 @@ class FatData:
                 img_handle = numpy_load(npz_path)
 
             img = img_handle["img"]
+
             if len(img.shape) == 2:  # if single panel
                 img = array([img])
 
@@ -478,7 +512,8 @@ class FatData:
             Ntot += sum(tot_pix)
 
             # load some ground truth data from the simulation dumps (e.g. spectrum)
-            h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
+            #h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
+            h5_fname = npz_path.replace(".npz", "")
             if args.character is not None:
                 h5_fname = h5_fname.replace("rock", args.character)
             if args.testmode2:
@@ -736,8 +771,8 @@ class FatData:
         nshots_on_this_rank = len(self.all_Hi)
         H, Hasu = [], []
         for i in range(nshots_on_this_rank):
-            H += B.all_Hi[i]
-            Hasu += B.all_Hi_asu[i]
+            H += self.all_Hi[i]
+            Hasu += self.all_Hi_asu[i]
 
         #print("Rank %d: Num miller vars on rank=%d" % (comm.rank, len(set(Hasu))))
 
@@ -749,7 +784,17 @@ class FatData:
 
         # after gather
         if comm.rank == 0:
+            print("Overall completeness\n<><><><><><><><>")
+            uc = self.all_ucell_mans[0]
+            from cctbx.array_family import flex as cctbx_flex
+            params = uc.a, uc.b, uc.c, uc.al*180/np.pi, uc.be*180/np.pi, uc.ga*180/np.pi
+            symm = symmetry(unit_cell=params, space_group_symbol=self.symbol)
+            hi_flex_unique = cctbx_flex.miller_index(list(set(self.Hi_asu_all_ranks)))
+            mset = miller.set(symm, hi_flex_unique, anomalous_flag=True)
+            mset.setup_binner(d_min=2, d_max=999, n_bins=10)
+            mset.completeness(use_binning=True).show()
             print("Rank %d: total miller vars=%d" % (comm.rank, len(set(Hi_asu_all_ranks))))
+
 
         # this will map the measured miller indices to their index in the LBFGS parameter array self.x
         self.idx_from_asu = {h: i for i, h in enumerate(set(self.Hi_asu_all_ranks))}
@@ -758,33 +803,20 @@ class FatData:
 
     def refine(self):
 
-        trials = {"fcell": [False, False, True],
-                  "scale": [True, False, True],
-                  "umatrix": [False, True, False],
-                  "bmatrix": [False, True, False],
-                  "ncells": [True, False, True],
-                  "bg": [False, False, True],
-                  "oversample:": [1, 1, 0],  # note cant be reset
-                  "max_calls": [100, 50, 100]}
+        trials = {"fcell": args.fcell,
+                  "scale": args.scale,
+                  "umatrix": args.umatrix,
+                  "bmatrix": args.bmatrix,
+                  "ncells": args.ncells,
+                  "bg": args.bg,
+                  "max_calls": args.maxcalls}
 
-        trials = {"fcell": [False, False],
-                  "scale": [True, False],
-                  "umatrix": [False, True],
-                  "bmatrix": [False, True],
-                  "ncells": [True, False],
-                  "bg": [False, False],
-                  "max_calls": [5, 20]}
+        Ntrials = len(trials["max_calls"])
 
-        #trials = {"fcell": [True, False],
-        #          "scale": [False, False],
-        #          "umatrix": [False, True],
-        #          "bmatrix": [False, True],
-        #          "ncells": [False, False],
-        #          "bg": [False, False],
-        #          "max_calls": [5000, 20]}
-
-        Ntrials = len(trials["fcell"])
         x_init = None
+        if args.xinitfile is not None:
+            x_init = flex_double(np_load(args.xinitfile)["x"])
+        
         for i_trial in range(Ntrials):
             self.RUC = FatRefiner(
                 n_total_params=self.n_total_unknowns,
@@ -805,13 +837,20 @@ class FatData:
                 perturb_fcell=args.perturbfcell,
                 global_ncells=args.globalNcells)
 
-            self.RUC.refine_Bmatrix = trials["bmatrix"][i_trial]
-            self.RUC.refine_Umatrix = trials["umatrix"][i_trial]
-            self.RUC.refine_Fcell = trials["fcell"][i_trial]
-            self.RUC.refine_ncells = trials["ncells"][i_trial]
-            self.RUC.refine_background_planes = trials["bg"][i_trial]
-            self.RUC.refine_crystal_scale = trials["scale"][i_trial]
-            self.RUC.max_calls = trials["max_calls"][i_trial]
+            if trials['bmatrix'] is not None:
+                self.RUC.refine_Bmatrix = bool(trials["bmatrix"][i_trial])
+            if trials['umatrix'] is not None:
+                self.RUC.refine_Umatrix = bool(trials["umatrix"][i_trial])
+            if trials['fcell'] is not None:
+                self.RUC.refine_Fcell = bool(trials["fcell"][i_trial])
+            if trials['ncells'] is not None:
+                self.RUC.refine_ncells = bool(trials["ncells"][i_trial])
+            if trials['bg'] is not None:
+                self.RUC.refine_background_planes = bool(trials["bg"][i_trial])
+            if trials['scale'] is not None:
+                self.RUC.refine_crystal_scale = bool(trials["scale"][i_trial])
+            if trials["max_calls"] is not None:
+                self.RUC.max_calls = trials["max_calls"][i_trial]
 
             # plot things
             self.RUC.debug = args.debug
@@ -822,7 +861,7 @@ class FatData:
             self.RUC.print_all_missets = args.printallmissets
             self.RUC.rot_scale = args.rotscale  # TODO make this work
             self.RUC.Fref = self.Fhkl_ref
-
+            self.RUC.refine_rotZ = args.fixrotZ
             self.RUC.plot_images = args.plot
             self.RUC.plot_fcell = args.plotfcell
             self.RUC.plot_residuals = args.residual
@@ -856,7 +895,7 @@ class FatData:
             #self.RUC.max_calls = args.maxcalls
             # NOTE working in trial mode
             self.RUC.refine_gain_fac = False
-            self.RUC.use_curvatures = False  # args.curvatures
+            self.RUC.use_curvatures = False # args.curvatures
             self.RUC.calc_curvatures = args.curvatures
             self.RUC.poisson_only = args.poissononly
             self.RUC.plot_stride = args.stride
