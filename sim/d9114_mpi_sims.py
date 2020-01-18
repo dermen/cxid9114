@@ -16,6 +16,8 @@ import argparse
 
 parser = argparse.ArgumentParser("make dadat")
 parser.add_argument("--savenoiseless", action="store_true")
+parser.add_argument("--start", default=None, type=int)
+parser.add_argument("--stop", default=None, type=int)
 parser.add_argument("--sanity", action="store_true")
 parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
@@ -166,7 +168,14 @@ if add_background and not make_background :
         assert background.shape == (64, 185, 194)
 
 print("Rank %d Begin" % rank)
-for i_data in range(args.num_trials):
+start = 0
+stop = args.num_trials
+if args.start is not None:
+    start = args.start
+if args.stop is not None:
+    stop = args.stop
+shot_range = range(start, stop)
+for i_data in shot_range:
     flux_id = data_fluxes_idx[i_data]
     h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, rank, i_data, flux_id)
     h5name = os.path.join(odirj, h5name)
