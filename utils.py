@@ -7,7 +7,8 @@ from dxtbx.datablock import DataBlockFactory
 from dxtbx.imageset import ImageSet, ImageSetData
 from dxtbx.model.experiment_list import ExperimentListFactory
 from cctbx import sgtbx, miller
-
+from cctbx.crystal import symmetry
+from scipy.optimize import minimize
 
 class FormatInMemory:
     """
@@ -239,3 +240,70 @@ def map_hkl_list(Hi_lst, anomalous_flag=True, symbol="P43212"):
     Hi_flex = flex.miller_index(tuple(map(tuple, Hi_lst)))
     miller.map_to_asu(sg_type, anomalous_flag, Hi_flex)
     return list(Hi_flex)
+
+
+def make_flex_indices(Hi_lst):
+    Hi_flex = flex.miller_index(tuple(map(tuple, Hi_lst)))
+    return Hi_flex
+
+def make_diff_array(F_mill):
+    mates = F_mill.match_bijvoet_mates()[1]
+    pairs = mates.pairs()
+    plus = pairs.column(0)
+    minus = pairs.column(1)
+    diff_idx = F_mill.indices().select(plus)  # minus and plus point to same indices
+    diff_data = F_mill.data().select(plus) - F_mill.data().select(minus)
+
+    diff_miller_set = F_mill.crystal_symmetry().miller_set(diff_idx, anomalous_flag=True)
+    diff_mill = miller.array(miller_set=diff_miller_set, data=diff_data)
+    return diff_mill
+
+
+def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symbol="P43212",
+                     anom=True, d_min=2, d_max=999, is_flex=False, optimize_scale=True, diff_mill=True,
+                     verbose=True):
+
+    if not is_flex:
+        sgi = sgtbx.space_group_info(symbol=symbol)
+        symm = symmetry(unit_cell=ucell, space_group_info=sgi)
+        Hi_index = make_flex_indices(Hi_index)
+        F1 = flex.double(F1)
+        F2 = flex.double(F2)
+        miller_set = symm.miller_set(Hi_index, anomalous_flag=anom)
+        F1 = miller.array(miller_set=miller_set, data=F1).set_observation_type_xray_amplitude()
+        F2 = miller.array(miller_set=miller_set, data=F2).set_observation_type_xray_amplitude()
+
+    r1_scale = 1
+    if optimize_scale:
+        res = minimize(_rfactor_minimizer_target,
+                    x0=[1], args=(F1, F2),
+                    method='Nelder-Mead')
+        if res.success:
+            r1_scale = res.x[0]
+            if verbose:
+                print("Optimization successful!, using scale factor=%f" % r1_scale)
+        else:
+            if verbose:
+                print("Scale optimization failed, using scale factor=1")
+
+    ret = F1.r1_factor(F2, scale_factor=r1_scale)
+    if verbose:
+        print("R-factor: %.4f" % ret)
+
+    # compute CCanom
+    if diff_mill:
+        F1 = make_diff_array(F1)
+        F2 = make_diff_array(F2)
+
+        ccanom = F1.correlation(F2)
+        if verbose:
+            print("CCanom: ")
+            ccanom.show_summary()
+        ret = ret, ccanom.coefficient()
+
+    return ret
+
+
+def _rfactor_minimizer_target(k, F1, F2):
+    return F1.r1_factor(F2, scale_factor=k[0])
+
