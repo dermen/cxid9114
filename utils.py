@@ -261,9 +261,10 @@ def make_diff_array(F_mill):
 
 def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symbol="P43212",
                      anom=True, d_min=2, d_max=999, is_flex=False, optimize_scale=True, diff_mill=True,
-                     verbose=True):
+                     verbose=True, sort_flex=False):
 
     if not is_flex:
+        assert Hi_index is not None
         sgi = sgtbx.space_group_info(symbol=symbol)
         symm = symmetry(unit_cell=ucell, space_group_info=sgi)
         Hi_index = make_flex_indices(Hi_index)
@@ -272,6 +273,11 @@ def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symb
         miller_set = symm.miller_set(Hi_index, anomalous_flag=anom)
         F1 = miller.array(miller_set=miller_set, data=F1).set_observation_type_xray_amplitude()
         F2 = miller.array(miller_set=miller_set, data=F2).set_observation_type_xray_amplitude()
+
+    if sort_flex:
+        F1 = F1.select_indices(F2.indices())
+        F1.sort(by_value='packed_indices')
+        F2.sort(by_value='packed_indices')
 
     r1_scale = 1
     if optimize_scale:
