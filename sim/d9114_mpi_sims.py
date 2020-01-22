@@ -114,10 +114,21 @@ if args.cspad:  # use a cspad for simulation
 if args.use_rank_as_seed:
     np.random.seed(rank)
 else:
-    np.random.seed(args.seed)
+    if has_mpi:
+        seeds = None
+        if rank==0:
+            np.random.seed()
+            seeds = np.random.permutation(99999)
+            seeds = list(seeds)
+
+        seeds = comm.bcast(seeds, root=0)
+        np.random.seed(seeds[comm.rank])
+        print "Rank %d, seed %d" % (comm.rank, seeds[comm.rank])
+    else:
+        np.random.seed()
 
 sim_path = os.path.dirname(sim_utils.__file__)
-spectra_filename = os.path.join(sim_path, "../spec/bs7_50000spec.h5")
+spectra_filename = os.path.join(sim_path, "../spec/bs7_100kspec.h5")
 spec_h5 = h5py.File(spectra_filename, "r")
 data_fluxes_all = spec_h5["fluxes"][()].astype(float)
 data_wavelengths_all = spec_h5["wavelengths"][()].astype(float)

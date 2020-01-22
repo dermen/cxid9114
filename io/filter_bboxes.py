@@ -8,7 +8,10 @@ try:
     size = comm.size
 
     has_mpi = True
+    print("has mpi")
 except ImportError:
+    print("NOOOOOOOOOOOO has mpi")
+    exit()
     has_mpi = False
     rank = 0
     size = 1
@@ -194,9 +197,10 @@ def main():
                 print ("WARNING: tilt_error not in hdf5 file")
 
         if "indexed_flag" in hgroups:
+            #TODO change me to assume indexed_flag is a bool
             if not args.notindexed:
                 indexed_flag = h["indexed_flag"]["shot%d" % shot_idx][()]
-                is_a_keeper = [k and (idx == 0) for k, idx in zip(is_a_keeper, indexed_flag)]
+                is_a_keeper = [k and (idx > 0) for k, idx in zip(is_a_keeper, indexed_flag)]
         else:
             if rank == 0:
                 print ("WARNING: indexed_flag not in hdf5 file")

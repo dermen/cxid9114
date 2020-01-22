@@ -51,7 +51,9 @@ if rank == 0:
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--xinitfile", type=str, default=None)
     parser.add_argument("--globalNcells", action="store_true")
+    parser.add_argument("--globalUcell", action="store_true")
     parser.add_argument("--scaleR1", action="store_true")
+    parser.add_argument("--stpmax", default=1e20, type=float)
     parser.add_argument("--usepreoptAmat", action="store_true")
     parser.add_argument("--usepreoptscale", action="store_true")
     parser.add_argument("--sad", action="store_true")
@@ -89,7 +91,6 @@ if rank == 0:
     parser.add_argument("--Fref", type=str, default=None)
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
     parser.add_argument("--plotstats", action="store_true")
-    
     parser.add_argument("--fcell", nargs="+", default=None, type=int)
     parser.add_argument("--ncells", nargs="+", default=None, type=int)
     parser.add_argument("--scale", nargs="+", default=None, type=int)
@@ -227,6 +228,7 @@ class FatData:
         self.Nload = args.nload  #
         self.all_pix = 0
         self.global_ncells_param = args.globalNcells
+        self.global_ucell_param = args.globalUcell
         self.time_load_start = 0
         self.fnames = []  # the filenames containing the datas
         self.per_image_refine_first = args.perimage  # do a per image refinement of crystal model prior to doing the global fat
@@ -853,6 +855,7 @@ class FatData:
                 self.RUC.max_calls = trials["max_calls"][i_trial]
 
             # plot things
+            self.RUC.stpmax = args.stpmax
             self.RUC.debug = args.debug
             self.RUC.binner_dmax = 999
             self.RUC.binner_dmin = 2
@@ -871,8 +874,6 @@ class FatData:
             self.RUC.log_fcells = True
             self.RUC.x_init = x_init
 
-            #if args.perturblist is not None:
-            #    self.RUC._hacked_fcells = range(args.perturblist)
             self.RUC.idx_from_asu = self.idx_from_asu
             self.RUC.asu_from_idx = self.asu_from_idx
             self.RUC.scale_r1 = args.scaleR1
