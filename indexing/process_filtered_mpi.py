@@ -1,13 +1,8 @@
 #!/usr/bin/env libtbx.python
 
-GAIN = 28
-sigma_readout = 3
-
-nstrong_tot = 0
-bragg_hi = []
-stills_hi = []
-
 from argparse import ArgumentParser
+
+
 
 parser = ArgumentParser("Make prediction boxes")
 
@@ -15,6 +10,7 @@ parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
 parser.add_argument("--pause", type=float, default=0.5)
 parser.add_argument("--debug", action="store_true")
+parser.add_argument("--showcompleteness", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--filteredexpt", type=str, required=True, help="filtered combined experiment file")
 parser.add_argument("--Z", type=float, default=2)
@@ -37,8 +33,14 @@ parser.add_argument("--symbol", default="P43212", type=str)
 parser.add_argument("--sanityplots", action='store_true')
 args = parser.parse_args()
 
+GAIN = 28
+sigma_readout = 3
+nmismatch = 0
+nstrong_tot = 0
 nstills_pred = 0
 nbragg_pred = 0
+bragg_hi = []
+stills_hi = []
 
 import glob
 import os
@@ -352,11 +354,12 @@ for i_shot in range(Nexper):
 
     refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
     spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
+    spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0, leading to nan snr values..
     shoeboxes = refls_predict['shoebox']
     bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
     bbox_panel_ids = np.array(refls_predict['panel'])
     Hi = np.vstack(refls_predict['miller_index'])
-    did_i_index = np.array(refls_predict['id'])
+    did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
     boundary_spot = np.array(refls_predict['boundary'])
 
     int_refl_path = os.path.join(os.path.dirname(args.filteredexpt),
@@ -364,7 +367,6 @@ for i_shot in range(Nexper):
     _R_shot = flex.reflection_table.from_file(int_refl_path)
     _R_shot_strong = Rmaster.select(Rmaster['id'] == i_shot)
 
-    nmismatch = 0
     for _pid in range(len(DET)):
         xstrong, ystrong = [], []
         x0, y0 = [], []
@@ -406,18 +408,20 @@ for i_shot in range(Nexper):
             tree = cKDTree(zip(x0, y0))
             res = tree.query_ball_point(zip(x, y), r=0.9)
             for i, r in enumerate(res):
+                miller_nano = rpp[_pid]["miller_index"][i]
+                if miller_nano[0] == 0 and miller_nano[1] == 0 and miller_nano[2] == 0:
+                    if rpp[_pid]["id"][i] != -1:  # if the spot actually indexed
+                        raise ValueError("a predicted spot cannot have miller index 0,0,0")
                 if not r:
                     continue
                 if len(r) > 1:
                     continue
                 i_near = r[0]
                 miller_stills = _R_panel["miller_index"][i_near]
-                miller_nano = rpp[_pid]["miller_index"][i]
-                #print miller_stills, miller_nano
                 if miller_stills != miller_nano:
+                    #raise ValueError("nanoBragg and stills process give different miller index")
                     nmismatch += 1
                     print "Bad: %s, %s" % (str(miller_stills), str(miller_nano))
-
 
     bragg_hi += map(tuple, Hi)
     stills_hi += list(_R_shot["miller_index"])
@@ -431,16 +435,22 @@ for i_shot in range(Nexper):
     if rank == 0:
         print ("RANK %d, SHOT %d : nstrong=%d (%d overall), nstills_pred=%d, (%d unique overall) nbragg_pred=%d (%d unique overall), nmismatch=%d"
                % (rank, i_shot, len(_R_shot_strong), nstrong_tot, len(_R_shot), nstills_tot, len(refls_predict), nbragg_tot, nmismatch))
-        #if has_mpi:
-        #    bragg_hi = comm.reduce(bragg_hi, MPI.SUM, root=0)
-        #    stills_hi = comm.reduce(stills_hi, MPI.SUM, root=0)
 
-        bragg_mset = miller.set(symm, flex.miller_index(bragg_hi), anomalous_flag=True)
+    if has_mpi and args.showcompleteness:
+        all_bragg_hi = comm.reduce(bragg_hi, MPI.SUM, root=0)
+        all_stills_hi = comm.reduce(stills_hi, MPI.SUM, root=0)
+
+    if rank == 0 and args.showcompleteness:
+        all_bragg_hi = utils.map_hkl_list(all_bragg_hi)
+        all_stills_hi = utils.map_hkl_list(all_stills_hi)
+        all_bragg_hi = list(set(all_bragg_hi))
+        all_stills_hi = list(set(all_stills_hi))
+        bragg_mset = miller.set(symm, flex.miller_index(all_bragg_hi), anomalous_flag=True)
         bragg_mset.setup_binner(d_max=999, d_min=2, n_bins=10)
         print("nanoBragg predictions:\n<><><><><><><><><><><><>")
         bragg_mset.completeness(use_binning=True).show()
 
-        stills_mset = miller.set(symm, flex.miller_index(stills_hi), anomalous_flag=True)
+        stills_mset = miller.set(symm, flex.miller_index(all_stills_hi), anomalous_flag=True)
         stills_mset.setup_binner(d_max=999, d_min=2, n_bins=10)
         print("Stills process predictions:\n<><><><><><><><><><><><>")
         stills_mset.completeness(use_binning=True).show()
