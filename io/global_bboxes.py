@@ -36,6 +36,7 @@ if rank == 0:
     parser.add_argument("--Ncells_size", default=30, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
+    parser.add_argument("--preopttag", default="preopt", type=str)
     parser.add_argument("--gainval", default=28, type=float)
     parser.add_argument("--curseoftheblackpearl", action="store_true")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
@@ -463,11 +464,11 @@ class FatData:
 
             log_init_crystal_scale = 0  # default
             if args.usepreoptscale:
-                log_init_crystal_scale = h["crystal_scale_preopt"][shot_idx]
+                log_init_crystal_scale = h["crystal_scale_%s" % args.preopttag][shot_idx]
             # get the indexed crystal Amatrix
             Amat = h["Amatrices"][shot_idx]
             if args.usepreoptAmat:
-                Amat = h["Amatrices_preopt"][shot_idx]
+                Amat = h["Amatrices_%s" % args.preopttag][shot_idx]
             amat_elems = list(sqr(Amat).inverse().elems)
             # real space basis vectors:
             a_real = amat_elems[:3]
@@ -707,47 +708,61 @@ class FatData:
         n_spot_per_image = [len(self.all_spot_roi[i_image]) for i_image in range(n_images)]
         n_spot_tot = sum(n_spot_per_image)
         total_pix = self.all_pix
+        # Per image we have 3 rotation angles to refine
         n_rot_param = 3
-        n_ncell_param = 1
-        n_scale_param = 1
-        # NOTE: n_param_per_image is no longer a constant when we refine background planes (unless we do a per-image polynomial fit background plane model)
+
+        # by default we assume each shot refines its own ncells param (mosaic domain size Ncells_abc in nanoBragg)
+        n_global_ncells_param = 0
+        n_per_image_ncells_param = 1
         if self.global_ncells_param:
-            n_param_per_image = [n_rot_param + n_scale_param + 3*n_spot_per_image[i]
-                                 for i in range(n_images)]
-        else:
-            n_param_per_image = [n_rot_param + n_ncell_param + n_scale_param + 3*n_spot_per_image[i]
-                                 for i in range(n_images)]
-        self.n_param_per_image = n_param_per_image
+            n_global_ncells_param = 1
+            n_per_image_ncells_param = 0
 
-        # TODO background refine
-        total_per_image_unknowns = sum(n_param_per_image)  # NOTE background refine
-        #total_per_image_unknowns = n_param_per_image * n_images
+        # by default each shot refines its own unit cell parameters (e.g. a,b,c,alpha, beta, gamma)
+        n_global_ucell_param = 0
+        n_per_image_ucell_param = self.n_ucell_param
+        if self.global_ucell_param:
+            n_global_ucell_param = self.n_ucell_param
+            n_per_image_ucell_param = 0
 
+        # 1 crystal scale factor refined per shot (overall scale)
+        n_per_image_scale_param = 1
+
+        # NOTE: n_param_per_image is no longer a constant when we refine background planes
+        # NOTE: (unless we do a per-image polynomial fit background plane model)
+        self.n_param_per_image = [n_rot_param + n_per_image_ncells_param + n_per_image_ucell_param +
+                             n_per_image_scale_param + 3*n_spot_per_image[i]
+                             for i in range(n_images)]
+
+        total_per_image_unknowns = sum(self.n_param_per_image)
+
+        # NOTE: local refers to per-image
         self.n_local_unknowns = total_per_image_unknowns
 
-        mem = self._usage()
+        mem = self._usage()  # get memory usage
         # note: roi para
+
+        # totals across ranks
         n_images = comm.reduce(n_images, MPI.SUM, root=0)
         n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
         total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
 
-        # Gather so that each rank knows how many local unknowns on each rank
-        local_unknowns_per_rank = comm.gather(total_per_image_unknowns)
-        mem_tot = comm.reduce(mem, MPI.SUM, root=0)
+        # Gather so that each rank knows exactly how many local unknowns are on the other ranks
+        local_unknowns_per_rank = comm.gather(self.n_local_unknowns)
 
         if comm.rank == 0:
-            total_local_unknowns = sum(local_unknowns_per_rank)
+            total_local_unknowns = sum(local_unknowns_per_rank)  # across all ranks
         else:
             total_local_unknowns = None
-
         self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
 
-        if self.global_ncells_param:
-            self.n_global_params = 2 + self.n_ucell_param + n_ncell_param + self.num_hkl_global  # detdist and gain + ucell params
-        else:
-            self.n_global_params = 2 + self.n_ucell_param + self.num_hkl_global  # detdist and gain + ucell params
+        # TODO: what is the 2 for (its gain and detector distance which are not currently refined...
+        self.n_global_params = 2 + n_global_ucell_param + n_global_ncells_param + self.num_hkl_global  # detdist and gain + ucell params
 
         self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
+
+        # also report total memory usage
+        mem_tot = comm.reduce(mem, MPI.SUM, root=0)
 
         comm.Barrier()
         if comm.rank == 0:
@@ -837,7 +852,7 @@ class FatData:
                 log_of_init_crystal_scales=self.log_of_init_crystal_scales,
                 all_crystal_scales=self.all_crystal_scales,
                 perturb_fcell=args.perturbfcell,
-                global_ncells=args.globalNcells)
+                global_ncells=args.globalNcells, global_ucell=args.globalUcell)
 
             if trials['bmatrix'] is not None:
                 self.RUC.refine_Bmatrix = bool(trials["bmatrix"][i_trial])
@@ -864,7 +879,7 @@ class FatData:
             self.RUC.print_all_missets = args.printallmissets
             self.RUC.rot_scale = args.rotscale  # TODO make this work
             self.RUC.Fref = self.Fhkl_ref
-            self.RUC.refine_rotZ = args.fixrotZ
+            self.RUC.refine_rotZ = not args.fixrotZ
             self.RUC.plot_images = args.plot
             self.RUC.plot_fcell = args.plotfcell
             self.RUC.plot_residuals = args.residual
@@ -872,6 +887,7 @@ class FatData:
             self.RUC.setup_plots()
 
             self.RUC.log_fcells = True
+            #FIXME in new code with per shot unit cell, this is broken..
             self.RUC.x_init = x_init
 
             self.RUC.idx_from_asu = self.idx_from_asu
@@ -886,15 +902,6 @@ class FatData:
             self.RUC.fcell_bump = args.fcellbump
             self.RUC.refine_detdist = False
             self.RUC.S.D.update_oversample_during_refinement = False
-            # NOTE working in trial mode
-            #self.RUC.refine_Umatrix = args.umatrix
-            #self.RUC.refine_Fcell = args.fcell
-            #self.RUC.refine_Bmatrix = args.bmatrix
-            #self.RUC.refine_ncells = args.ncells
-            #self.RUC.refine_crystal_scale = args.scale
-            #self.RUC.refine_background_planes = args.bg
-            #self.RUC.max_calls = args.maxcalls
-            # NOTE working in trial mode
             self.RUC.refine_gain_fac = False
             self.RUC.use_curvatures = False # args.curvatures
             self.RUC.calc_curvatures = args.curvatures
@@ -951,6 +958,7 @@ class FatData:
                     print("<><><> END OF TRIAL %02d <><><><>" % (i_trial+1))
                     print ("<><><><><><><><><><><><><><><><>")
 
+            #embed()
             x_init = self.RUC.x  # restart with these parameters next time
 
         # Here we can save the refined parameters
