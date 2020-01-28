@@ -29,6 +29,7 @@ parser.add_argument("--show_params", action='store_true')
 parser.add_argument("--forcelambda", type=float, default=None)
 parser.add_argument("--noiseless", action="store_true")
 parser.add_argument("--imgdirname", type=str, default=None)
+parser.add_argument("--indexdirname", type=str, default=None)
 parser.add_argument("--symbol", default="P43212", type=str)
 parser.add_argument("--sanityplots", action='store_true')
 args = parser.parse_args()
@@ -82,7 +83,7 @@ if rank == 0:
     print(args)
     if args.sanityplots:
         import pylab as plt
-        fig = plt.figure(1)
+        fig = plt.figure()
         ax = plt.gca()
 
 # Load in the reflection tables and experiment lists
@@ -91,6 +92,10 @@ El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
 Rmaster = flex.reflection_table.from_file(args.filteredexpt.replace(".expt", ".refl"))
 Nexper = len(El)
 print ("Read int %d experiments" % Nexper)
+# get the original indexing directory name
+indexdirname = args.indexdirname
+if args.indexdirname is None:
+    indexdirname = os.path.dirname(args.filteredexpt)
 
 if args.noiseless:
     GAIN = 1
@@ -247,7 +252,7 @@ for i_shot in range(Nexper):
     # HERE WE LOAD THE STRONG SPOTS AND MAKE THEM INTO A MASK
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
     # load strong spot reflections
-    refl_strong_fname = os.path.join( os.path.dirname(args.filteredexpt), 
+    refl_strong_fname = os.path.join(indexdirname,
                 "idx-"+os.path.basename(fpath.replace(".npz", "_strong.refl")))
     refls_strong = flex.reflection_table.from_file(refl_strong_fname) 
     # make mask of all strong spot pixels..
@@ -362,7 +367,7 @@ for i_shot in range(Nexper):
     did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
     boundary_spot = np.array(refls_predict['boundary'])
 
-    int_refl_path = os.path.join(os.path.dirname(args.filteredexpt),
+    int_refl_path = os.path.join(indexdirname,
                                  "idx-" + os.path.basename(fpath).replace(".h5.npz", ".h5_integrated.refl"))
     _R_shot = flex.reflection_table.from_file(int_refl_path)
     _R_shot_strong = Rmaster.select(Rmaster['id'] == i_shot)
@@ -387,22 +392,23 @@ for i_shot in range(Nexper):
         if len(_R_panel) > 0:
             x0, y0, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_panel))
 
-        if list(x0) and list(x) and args.sanityplots:
-            m = img_data[_pid].mean()
-            s = img_data[_pid].std()
-            vmax = m + 4 * s
-            vmin = m - s
+        #if list(x0) and list(x) and args.sanityplots:
+        #    m = img_data[_pid].mean()
+        #    s = img_data[_pid].std()
+        #    vmax = m + 4 * s
+        #    vmin = m - s
 
-            plt.figure(1)
-            ax = plt.gca()
-            ax.imshow(img_data[_pid], vmax=vmax, vmin=vmin)
-            for i in range(len(rpp[_pid])):
-                ax.text(x=x[i], y=y[i] - 10, s=str(rpp[_pid]["miller_index"][i]), color='w', size=14)
-            ax.plot(x, y, 'w^', ms=10, mfc='none')
-            for i in range(len(_R_panel)):
-                ax.text(x=x0[i], y=y0[i], s=str(_R_panel["miller_index"][i]), color='r', size=13)
-            ax.plot(x0, y0, 'rs', ms=10, mfc='none')
-            plt.plot(xstrong, ystrong, 'go')
+        #    plt.figure(1)
+        #    ax = plt.gca()
+        #    ax.clear()
+        #    ax.imshow(img_data[_pid], vmax=vmax, vmin=vmin)
+        #    for i in range(len(rpp[_pid])):
+        #        ax.text(x=x[i], y=y[i] - 10, s=str(rpp[_pid]["miller_index"][i]), color='w', size=14)
+        #    ax.plot(x, y, 'w^', ms=10, mfc='none')
+        #    for i in range(len(_R_panel)):
+        #        ax.text(x=x0[i], y=y0[i], s=str(_R_panel["miller_index"][i]), color='r', size=13)
+        #    ax.plot(x0, y0, 'rs', ms=10, mfc='none')
+        #    plt.plot(xstrong, ystrong, 'go')
 
         if list(x0) and list(x):
             tree = cKDTree(zip(x0, y0))
@@ -460,7 +466,6 @@ for i_shot in range(Nexper):
     # <><><><><><><><><><><><><><><>
     if rank == 0 and args.sanityplots:
         refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
-        plt.figure()
         pause = args.pause
         for panel_id in refls_predict_bypanel:
             panel_img = img_data[panel_id]
@@ -468,8 +473,8 @@ for i_shot in range(Nexper):
             s = panel_img.std()
             vmax = m + 4*s
             vmin = m - s
-            plt.cla()
-            im = plt.imshow(panel_img, vmax=vmax, vmin=vmin)
+            ax.clear()
+            im = ax.imshow(panel_img, vmax=vmax, vmin=vmin)
             int_mask = np.zeros(panel_img.shape).astype(np.bool)
             bg_mask = np.zeros(panel_img.shape).astype(np.bool)
 

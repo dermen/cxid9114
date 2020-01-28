@@ -34,6 +34,8 @@ if rank == 0:
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--fixrotZ", action='store_true')
     parser.add_argument("--Ncells_size", default=30, type=float)
+    parser.add_argument("--cella", default=None, type=float)
+    parser.add_argument("--cellc", default=None, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--preopttag", default="preopt", type=str)
@@ -47,9 +49,12 @@ if rank == 0:
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--residual", action='store_true')
+    parser.add_argument("--setuponly", action='store_true')
     parser.add_argument('--filterbad', action='store_true')
     parser.add_argument("--tryscipy", action="store_true")
     parser.add_argument("--restartfile", type=str, default=None)
+    parser.add_argument("--Fobslabel", type=str, default=None)
+    parser.add_argument("--Freflabel", type=str, default=None)
     parser.add_argument("--xinitfile", type=str, default=None)
     parser.add_argument("--globalNcells", action="store_true")
     parser.add_argument("--globalUcell", action="store_true")
@@ -83,6 +88,7 @@ if rank == 0:
     parser.add_argument("--oversample", default=0, type=int)
     parser.add_argument("--hack", action="store_true", help="use the local 6 tester files")
     parser.add_argument("--curvatures", action='store_true')
+    parser.add_argument("--numposcurvatures", default=7, type=int)
     parser.add_argument("--startwithtruth", action='store_true')
     parser.add_argument("--testmode2", action="store_true", help="debug flag for doing a test run")
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
@@ -420,7 +426,6 @@ class FatData:
         #        fpath = fpath.split("/kaladin/")[1]
         #        fpath = os.path.join(args.imgdirname, fpath)
         #    self.my_open_files[fidx] = h5py.File(fpath, "r")
-
         Ntot = 0
 
         for img_num, (fname_idx, shot_idx) in enumerate(my_shots):
@@ -581,10 +586,16 @@ class FatData:
             # create a nanoBragg crystal
             if img_num == 0:  # only initialize the simulator after loading the first image
                 if args.sad:
-                    self.Fhkl_obs = open_flex(args.Fobs).as_amplitude_array()
+                    if args.Fobslabel is not None:
+                        self.Fhkl_obs = FatData.open_mtz(args.Fobs, args.Fobslabel)
+                    else:
+                        self.Fhkl_obs = open_flex(args.Fobs).as_amplitude_array()
                     self.Fhkl_ref = args.Fref
                     if args.Fref is not None:
-                        self.Fhkl_ref = open_flex(args.Fref).as_amplitude_array()  # this reference miller array is used to track CC and R-factor
+                        if args.Freflabel is not None:
+                            self.Fhkl_ref = FatData.open_mtz(args.Fref, args.Freflabel)
+                        else:
+                            self.Fhkl_ref = open_flex(args.Fref).as_amplitude_array()  # this reference miller array is used to track CC and R-factor
 
                     if args.p9:
                         wavelen = 0.9793
@@ -697,6 +708,35 @@ class FatData:
         mem = mem * conv  # convert to GB
         return mem
 
+    def init_global_ucell(self):
+        if self.global_ucell_param:
+            n_images = len(self.all_spot_roi)
+            if args.cella is None and args.cellc is None:
+                if comm.rank == 0:
+                    print ("Init global ucell without cella and cellc")
+
+                # TODO: implement for non tetragonal
+                a_vals, _, c_vals, _, _, _ = zip(*[self.all_crystal_models[i].get_unit_cell().parameters()
+                                                   for i in range(n_images)])
+                a_vals = list(a_vals)
+                c_vals = list(c_vals)
+                a_vals = comm.reduce(a_vals, MPI.SUM, root=0)
+                c_vals = comm.reduce(c_vals, MPI.SUM, root=0)
+
+                a_mean = c_mean = None
+                if comm.rank == 0:
+                    a_mean = np.median(a_vals)
+                    c_mean = np.median(c_vals)
+                a_mean = comm.bcast(a_mean, root=0)
+                c_mean = comm.bcast(c_mean, root=0)
+            else:
+                a_mean = args.cella
+                c_mean = args.cellc
+
+            print ("Rank %d:  Updating ucell mean for each ucell manager to %.4f %.4f" % (comm.rank, a_mean, c_mean))
+            for i_shot in range(n_images):
+                self.all_ucell_mans[i_shot].variables = a_mean, c_mean
+
     def tally_statistics(self):
 
         # tally up all miller indices in this refinement
@@ -710,6 +750,7 @@ class FatData:
         total_pix = self.all_pix
         # Per image we have 3 rotation angles to refine
         n_rot_param = 3
+
 
         # by default we assume each shot refines its own ncells param (mosaic domain size Ncells_abc in nanoBragg)
         n_global_ncells_param = 0
@@ -904,6 +945,7 @@ class FatData:
             self.RUC.S.D.update_oversample_during_refinement = False
             self.RUC.refine_gain_fac = False
             self.RUC.use_curvatures = False # args.curvatures
+            self.RUC.use_curvatures_threshold = args.numposcurvatures
             self.RUC.calc_curvatures = args.curvatures
             self.RUC.poisson_only = args.poissononly
             self.RUC.plot_stride = args.stride
@@ -947,7 +989,7 @@ class FatData:
                                     fprime=fprime, args=[self.RUC])
 
             else:
-                self.RUC.run()
+                self.RUC.run(setup_only=args.setuponly)
                 if self.RUC.hit_break_to_use_curvatures:
                     self.RUC.num_positive_curvatures = 0
                     self.RUC.use_curvatures = True
@@ -958,38 +1000,51 @@ class FatData:
                     print("<><><> END OF TRIAL %02d <><><><>" % (i_trial+1))
                     print ("<><><><><><><><><><><><><><><><>")
 
-            #embed()
             x_init = self.RUC.x  # restart with these parameters next time
 
         # Here we can save the refined parameters
-        my_shots = B.all_shot_idx.keys()
-        x = B.RUC.x
+        my_shots = self.all_shot_idx.keys()
+        x = self.RUC.x
         data_to_send = []
         for i_shot in my_shots:
-            ang, ax = B.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
-            Bmat = B.RUC.get_refined_Bmatrix(i_shot)
-            C = B.RUC.CRYSTAL_MODELS[i_shot]
+            ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
+            Bmat = self.RUC.get_refined_Bmatrix(i_shot)
+            C = self.RUC.CRYSTAL_MODELS[i_shot]
             C.set_B(Bmat)
-            C.rotate_around_origin(ax, ang)
+            try:
+                C.rotate_around_origin(ax, ang)
+            except RuntimeError:
+                pass
             Amat_refined = C.get_A()
 
-            scale_xpos = B.RUC.spot_scale_xpos[i_shot]
-
+            scale_xpos = self.RUC.spot_scale_xpos[i_shot]
             log_crystal_scale = x[scale_xpos]
             proc_h5_fname = B.all_proc_fnames[i_shot]
             proc_h5_idx = B.all_shot_idx[i_shot]
-            data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined))
+
+            nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
+            bgplane_a = [x[self.RUC.bg_a_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
+            bgplane_b = [x[self.RUC.bg_b_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
+            bgplane_c = [x[self.RUC.bg_c_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
+            bgplane = zip(bgplane_a, bgplane_b, bgplane_c)
+
+            ncells_val = x[self.RUC.ncells_xpos[i_shot]]
+
+            data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined, ncells_val, bgplane))
 
         data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
         if comm.rank == 0:
             import pandas
-            fnames, shot_idx, log_scales, Amats = zip(*data_to_send)
+            fnames, shot_idx, log_scales, Amats, ncells_vals, bgplanes = zip(*data_to_send)
+
             df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx,
-                                   "log_scales": log_scales, "Amats": Amats})
+                                   "log_scales": log_scales, "Amats": Amats, "ncells": ncells_vals,
+                                   "bgplanes": bgplanes})
             opt_outname = "optimized_params.pkl"
             if args.optoutname is not None:
                 opt_outname = args.optoutname
             df.to_pickle(opt_outname)
+
 
     def init_misset_results(self):
         results = []
@@ -1008,6 +1063,28 @@ class FatData:
             results.append(angular_offset_init)
         return results
 
+    #TODO: test this method ;)
+    @staticmethod
+    def open_mtz(mtzfname, mtzlabel=None):
+        if mtzlabel is None:
+            mtzlabel = "fobs(+)fobs(-)"
+        print ("Opening mtz file %s" % mtzfname)
+        from iotbx.reflection_file_reader import any_reflection_file
+        miller_arrays = any_reflection_file(mtzfname).as_miller_arrays()
+
+        possible_labels = []
+        foundlabel = False
+        for ma in miller_arrays:
+            label = ma.info().label_string
+            possible_labels.append(label)
+            if label == mtzlabel:
+                foundlabel = True
+                break
+
+        assert foundlabel, "MTZ Label not found... \npossible choices: %s" % " ".join(possible_labels)
+
+        return ma.as_amplitude_array()
+
 
 ####pr = cProfile.Profile()
 ####pr.enable()
@@ -1025,26 +1102,15 @@ if comm.rank == 0:
 
 comm.Barrier()
 B.tally_statistics()
-
-##print("Rank %d made it" % comm.rank)
-#import time
-#time.sleep(2)
-#if args.loadonly:
-#    comm.Barrier()
-#    comm.Abort()
+B.init_global_ucell()
 comm.Barrier()
 B.refine()
 
 #proc_fnames_shots = [(B.all_proc_fnames[i], B.all_shot_idx[i]) for i in my_shots]
 
-
 #parameters =[
 #    (f, i, np.exp(x[B.RUC.spot_scale_xpos[i]]), x[B.RUC.rotX_xpos[i]], x[B.RUC.rotY_xpos[i]], x[B.RUC.rotZ_xpos[i]])
 #    for f, i in proc_fnames_shots]
-
-
-
-
 
 #pr.disable()
 #
