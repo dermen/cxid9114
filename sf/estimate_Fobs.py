@@ -1,9 +1,13 @@
 # coding: utf-8
+# TODO:make more general for different unit cells
 from argparse import ArgumentParser
 parser = ArgumentParser("Load and refine bigz")
 parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_filtered_mpi)")
 parser.add_argument("--truth", type=str, default=None, help="path to pickled miller array of ground truth")
-parser.add_argument("--merge", type=str, required=True, help="path to cctbx.xfel.merge output mtz file")
+parser.add_argument("--merge", type=str, required=True, help="path to input merge (pkl of miller array or mtz)")
+parser.add_argument("--out", type=str, required=True, help='output filename')
+parser.add_argument("--mtzoutput", action='store_true', help='write an mtz file as output')
+parser.add_argument("--mtzinput", action='store_true', help='input merge file is an mtz file')
 args = parser.parse_args()
 
 import h5py
@@ -31,7 +35,11 @@ for f in fnames:
 u_all_Hi = list(set(utils.map_hkl_list(all_Hi)))
 
 # Load the cctbx.xfel.merge output for estimation of initial params    
-F = any_reflection_file(args.merge).as_miller_arrays()[0].as_amplitude_array()
+if args.mtzinput:
+#   TODO: make this so that one can selec on label (e.g. fobs)
+    F = any_reflection_file(args.merge).as_miller_arrays()[0].as_amplitude_array()
+else:
+    F = utils.open_flex(args.merge).as_amplitude_array()
 Fmap = {h:amp for h,amp in zip(F.indices(), F.data())}
 merge_Hi = list(set(utils.map_hkl_list(Fmap.keys())))
 
@@ -48,6 +56,7 @@ resom = np.array(resom)[:,None]
 tree = cKDTree(resom)
 o, knearest = tree.query(reso,k=5)
 
+# TODO get rid of this ucell  hard code
 symm = symmetry(unit_cell=(79.1,79.1,38.4,90,90,90), space_group_symbol='P43212')
 u_all_amp = []
 for i_h,h in enumerate(u_all_Hi):
@@ -74,11 +83,15 @@ data = flex.double(u_all_amp)
 # save as an MTZ
 mset = miller.set(symm, indices=indices, anomalous_flag=True)
 marray = miller.array(mset, data).set_observation_type_xray_amplitude()
-mtz = marray.as_mtz_dataset(column_root_label='fobs',wavelength=parameters.WAVELEN_HIGH)
-ob = mtz.mtz_object()
-ob.write("bs7_kaladin_2_000.mtz")
+if args.mtzoutput:
+    mtz = marray.as_mtz_dataset(column_root_label='fobs',wavelength=parameters.WAVELEN_HIGH)
+    ob = mtz.mtz_object()
+    ob.write(args.out)
+    #ob.write("bs7_kaladin_2_000.mtz")
 # save as a PKL
-utils.save_flex( marray, "bs7_kaladin_2_000.pkl")
+else:
+    utils.save_flex( marray, args.out)
+#utils.save_flex( marray, "bs7_kaladin_2_000.pkl")
 
 if args.truth is not None:
     Ftruth =  utils.open_flex(args.truth)
