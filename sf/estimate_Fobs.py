@@ -8,6 +8,7 @@ parser.add_argument("--merge", type=str, required=True, help="path to input merg
 parser.add_argument("--out", type=str, required=True, help='output filename')
 parser.add_argument("--mtzoutput", action='store_true', help='write an mtz file as output')
 parser.add_argument("--mtzinput", action='store_true', help='input merge file is an mtz file')
+parser.add_argument("--dhighres", type=float, default=2, help="high resolution limit")
 args = parser.parse_args()
 
 import h5py
@@ -20,6 +21,9 @@ from cctbx.array_family import flex
 from cctbx import miller
 from cctbx.crystal import symmetry
 from cxid9114 import parameters
+
+
+a,b,c = 79.1, 79.1, 38.4
 
 # load all miller indices corresponding to diffBragg ROIs
 fnames = glob.glob(args.glob)
@@ -39,25 +43,25 @@ if args.mtzinput:
 #   TODO: make this so that one can selec on label (e.g. fobs)
     F = any_reflection_file(args.merge).as_miller_arrays()[0].as_amplitude_array()
 else:
-    F = utils.open_flex(args.merge).as_amplitude_array()
+    F = utils.open_flex(args.merge)#.as_amplitude_array()
 Fmap = {h:amp for h,amp in zip(F.indices(), F.data())}
 merge_Hi = list(set(utils.map_hkl_list(Fmap.keys())))
 
 # diffBragg resolutions
 h,k,l = map (np.array, zip(*u_all_Hi) ) 
-reso = np.sqrt(1 / (h**2 / 79./ 79. + k**2 / 79./79. + l**2 / 38./38. ) )
+reso = np.sqrt(1 / (h**2 / a/ a + k**2 / b/b + l**2 / c/c ) )
 reso = np.array(reso)[:,None]
 
 # merged resolutions
 hm,km,lm = map (np.array, zip(*merge_Hi) ) 
-resom = np.sqrt(1 / (hm**2 / 79./ 79. + km**2 / 79./79. + lm**2 / 38./38. ) )
+resom = np.sqrt(1 / (hm**2 / a/a + km**2 / b/b + lm**2 / c/c ) )
 resom = np.array(resom)[:,None]
 
 tree = cKDTree(resom)
 o, knearest = tree.query(reso,k=5)
 
 # TODO get rid of this ucell  hard code
-symm = symmetry(unit_cell=(79.1,79.1,38.4,90,90,90), space_group_symbol='P43212')
+symm = symmetry(unit_cell=(a,b,c,90,90,90), space_group_symbol='P43212')
 u_all_amp = []
 for i_h,h in enumerate(u_all_Hi):
     if h in Fmap:
@@ -71,7 +75,7 @@ for i_h,h in enumerate(u_all_Hi):
             amps = [Fmap[merge_Hi[ii]] for ii in knearest[i_h]]
             amp =  np.median(amp)
     u_all_amp.append( amp)
-    print("(reso=%.4f),in_array=%d, amplitude %.4f" % (reso[i_h], in_array, amp))
+    #print("(reso=%.4f),in_array=%d, amplitude %.4f" % (reso[i_h], in_array, amp))
     
 bad_idx = u_all_Hi.index((0,0,0))
 u_all_Hi.pop(bad_idx)
@@ -95,6 +99,6 @@ else:
 
 if args.truth is not None:
     Ftruth =  utils.open_flex(args.truth)
-    marray_2 = marray.select(marray.resolution_filter_selection(d_max=999, d_min=2))
+    marray_2 = marray.select(marray.resolution_filter_selection(d_max=30, d_min=args.dhighres))
     r,c = utils.compute_r_factor(Ftruth, marray_2, is_flex=True, sort_flex=True)
-    print("Truth R factor=%4f and CCanom=%.4f out to 2 Angstrom" % (r,c))
+    print("Truth R-factor=%4f and CC-Delta-anom=%.4f out to %.4f Angstrom" % (r,c, args.dhighres))
