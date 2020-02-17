@@ -35,6 +35,7 @@ if rank == 0:
     parser.add_argument("--fixrotZ", action='store_true')
     parser.add_argument("--Ncells_size", default=30, type=float)
     parser.add_argument("--cella", default=None, type=float)
+    parser.add_argument("--gradientonly", action='store_true') 
     parser.add_argument("--cellc", default=None, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
@@ -80,7 +81,7 @@ if rank == 0:
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--forcemono", action='store_true')
-    parser.add_argument("--unknownscale", action='store_true')
+    parser.add_argument("--unknownscale", default=None, type=float, help="Initial scale factor to apply to shots...")
     parser.add_argument("--printallmissets", action='store_true')
     parser.add_argument("--gainrefine", action="store_true")
     parser.add_argument("--fcellbump", default=0.1, type=float)
@@ -301,8 +302,13 @@ class FatData:
 
         if args.character is not None:
             if args.character in ["rock", "syl", "syl2", "syl3", "kaladin"]:
-                if args.unknownscale:
-                    self.SIM.D.spot_scale = 17884  # determined from refinement using the syl3 starting model
+                if args.unknownscale is not None:
+                    #self.SIM.D.spot_scale = 1e6
+                    
+                    self.SIM.D.spot_scale = args.unknownscale
+                    #self.SIM.D.spot_scale = 15555.1313 kaladin_2k after a small batch starting from some high number 
+
+                    #self.SIM.D.spot_scale = 17884  # determined from refinement using the syl3 starting model
                 else:
                     self.SIM.D.spot_scale = 1150
                     self.SIM.D.polarization = .999
@@ -911,6 +917,7 @@ class FatData:
                 self.RUC.max_calls = trials["max_calls"][i_trial]
 
             # plot things
+            self.RUC.gradient_only=args.gradientonly
             self.RUC.stpmax = args.stpmax
             self.RUC.debug = args.debug
             self.RUC.binner_dmax = 999
@@ -1006,6 +1013,9 @@ class FatData:
         my_shots = self.all_shot_idx.keys()
         x = self.RUC.x
         data_to_send = []
+        image_corr = self.RUC.image_corr
+        if image_corr is None:
+            image_corr = [-1]*len(my_shots)
         for i_shot in my_shots:
             ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
             Bmat = self.RUC.get_refined_Bmatrix(i_shot)
@@ -1017,29 +1027,61 @@ class FatData:
                 pass
             Amat_refined = C.get_A()
 
+            fcell_xstart = self.RUC.fcell_xstart
+            ucell_xstart = self.RUC.ucell_xstart[i_shot]
+            rotX_xpos = self.RUC.rotX_xpos[i_shot]
+            rotY_xpos = self.RUC.rotY_xpos[i_shot]
+            rotZ_xpos = self.RUC.rotZ_xpos[i_shot]
             scale_xpos = self.RUC.spot_scale_xpos[i_shot]
+            ncells_xpos = self.RUC.ncells_xpos[i_shot]
+            nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
+            bgplane_a_xpos = [self.RUC.bg_a_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+            bgplane_b_xpos = [self.RUC.bg_b_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+            bgplane_c_xpos = [self.RUC.bg_c_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+            bgplane_xpos = zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos)
+            
             log_crystal_scale = x[scale_xpos]
             proc_h5_fname = B.all_proc_fnames[i_shot]
             proc_h5_idx = B.all_shot_idx[i_shot]
 
-            nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
             bgplane_a = [x[self.RUC.bg_a_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
             bgplane_b = [x[self.RUC.bg_b_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
             bgplane_c = [x[self.RUC.bg_c_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
             bgplane = zip(bgplane_a, bgplane_b, bgplane_c)
 
-            ncells_val = x[self.RUC.ncells_xpos[i_shot]]
-
-            data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined, ncells_val, bgplane))
+            ncells_val = x[ncells_xpos]
+            data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined, ncells_val, bgplane, \
+                image_corr[i_shot], fcell_xstart, ucell_xstart, rotX_xpos, rotY_xpos, rotZ_xpos, scale_xpos, \
+                ncells_xpos, bgplane_xpos))
 
         data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
         if comm.rank == 0:
             import pandas
-            fnames, shot_idx, log_scales, Amats, ncells_vals, bgplanes = zip(*data_to_send)
+            import h5py
+            fnames, shot_idx, log_scales, Amats, ncells_vals, bgplanes, image_corr, \
+                fcell_xstart, ucell_xstart, rotX_xpos, rotY_xpos, rotZ_xpos, scale_xpos, ncells_xpos, bgplane_xpos \
+                = zip(*data_to_send)
+
 
             df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx,
                                    "log_scales": log_scales, "Amats": Amats, "ncells": ncells_vals,
-                                   "bgplanes": bgplanes})
+                                   "bgplanes": bgplanes, "image_corr": image_corr,
+                                   "fcell_xstart":fcell_xstart,
+                                   "ucell_xstart": ucell_xstart,
+                                   "rotX_xpos":rotX_xpos,
+                                   "rotY_xpos":rotY_xpos,
+                                   "rotZ_xpos":rotZ_xpos,
+                                   "scale_xpos":scale_xpos,
+                                   "ncells_xpos":ncells_xpos,
+                                   "bgplanes_xpos":bgplane_xpos})
+            u_fnames = df.proc_fnames.unique()
+
+            u_h5s = {f:h5py.File(f,'r')["h5_path"][()] for f in u_fnames}
+            img_fnames = []
+            for f,idx in df[['proc_fnames','proc_shot_idx']].values:
+                img_fnames.append( u_h5s[f][idx] )
+            df["imgpaths"] = img_fnames
+
             opt_outname = "optimized_params.pkl"
             if args.optoutname is not None:
                 opt_outname = args.optoutname
@@ -1098,7 +1140,11 @@ ang_res = B.init_misset_results()
 ang_res = comm.reduce(ang_res, MPI.SUM, root=0)
 if comm.rank == 0:
     miss = [a for a in ang_res if a > 0]
+
+    print "INIT MISSETS\n%s"%", ".join(map(str,ang_res))
     print("INITIAL MEDIAN misset = %f" % np.median(miss))
+    print("INITIAL MAX misset = %f" % np.max(miss))
+    print("INITIAL MIN misset = %f" % np.min(miss))
 
 comm.Barrier()
 B.tally_statistics()

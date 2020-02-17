@@ -261,7 +261,7 @@ def make_diff_array(F_mill):
 
 def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symbol="P43212",
                      anom=True, d_min=2, d_max=999, is_flex=False, optimize_scale=True, diff_mill=True,
-                     verbose=True, sort_flex=False):
+                     verbose=True, sort_flex=False, n_bin=None):
 
     if not is_flex:
         assert Hi_index is not None
@@ -276,8 +276,8 @@ def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symb
 
     if sort_flex:
         F1 = F1.select_indices(F2.indices())
-        F1.sort(by_value='packed_indices')
-        F2.sort(by_value='packed_indices')
+        F1=F1.sort(by_value='packed_indices')
+        F2=F2.sort(by_value='packed_indices')
 
     r1_scale = 1
     if optimize_scale:
@@ -312,4 +312,50 @@ def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symb
 
 def _rfactor_minimizer_target(k, F1, F2):
     return F1.r1_factor(F2, scale_factor=k[0])
+
+
+def compute_r_factor_binned(F1, F2, Hi_index=None, ucell=(79.1, 79., 38, 90, 90, 90), symbol="P43212",
+                     anom=True, d_min=2, d_max=999,  is_flex=False, optimize_scale=True, diff_mill=True,
+                     verbose=True,  n_bin=10):
+
+    
+    #mset = miller.set(F1.crystal_symmetry(), F2.indices(), anomalous_flag=True)
+    #F2 = miller.array( mset, F2.data())
+    
+    F1 = F1.select_indices(F2.indices())
+    F1 = F1.sort(by_value='packed_indices')
+    F2 = F2.sort(by_value='packed_indices')
+    _=F1.setup_binner(d_min=d_min, d_max=d_max, n_bins=n_bin)
+    _=F2.setup_binner(d_min=d_min, d_max=d_max, n_bins=n_bin)
+
+    r1_scale = 1
+    if optimize_scale:
+        res = minimize(_rfactor_minimizer_target,
+                    x0=[1], args=(F1, F2),
+                    method='Nelder-Mead')
+        if res.success:
+            r1_scale = res.x[0]
+            if verbose:
+                print("Optimization successful!, using scale factor=%f" % r1_scale)
+        else:
+            if verbose:
+                print("Scale optimization failed, using scale factor=1")
+
+    ret = F1.r1_factor(F2, scale_factor=r1_scale, use_binning=True)
+    if verbose:
+        print("R-factor: %.4f" % ret.show())
+
+    # compute CCanom
+    if diff_mill:
+        F1 = make_diff_array(F1)
+        F2 = make_diff_array(F2)
+        _=F1.setup_binner(d_min=d_min, d_max=d_max, n_bins=n_bin)
+        _=F2.setup_binner(d_min=d_min, d_max=d_max, n_bins=n_bin)
+        ccanom = F1.correlation(F2, use_binning=True)
+        if verbose:
+            print("CCanom: ")
+            ccanom.show()
+        ret = ret, ccanom
+
+    return ret
 
