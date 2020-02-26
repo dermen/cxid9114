@@ -201,9 +201,9 @@ def main(rank):
             data_energies = [parameters.ENERGY_LOW, parameters.ENERGY_HIGH]  # should be 8944 and 9034
             data_sf = [1, 1]  # dont care about structure factors when simulating background water scatter
             Ncells_abc = 10, 10, 10
-            only_water=True
+            only_water = True
         else:
-            only_water=False
+            only_water = False
       
         xtal_size_mm = args.xtal_size_mm
         if args.xtal_size_jitter is not None:
