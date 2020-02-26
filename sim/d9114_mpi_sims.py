@@ -92,7 +92,7 @@ import os
 import sys
 import h5py
 import numpy as np
-
+from cxid9114 import utils
 from simtbx.nanoBragg import shapetype, nanoBragg
 from scitbx.array_family import flex
 from dxtbx.model.crystal import CrystalFactory
@@ -117,7 +117,7 @@ else:
     if has_mpi:
         seeds = None
         if rank==0:
-            np.random.seed()
+            np.random.seed(args.seed)
             seeds = np.random.permutation(99999)
             seeds = list(seeds)
 
@@ -125,7 +125,7 @@ else:
         np.random.seed(seeds[comm.rank])
         print "Rank %d, seed %d" % (comm.rank, seeds[comm.rank])
     else:
-        np.random.seed()
+        np.random.seed(args.seed)
 
 sim_path = os.path.dirname(sim_utils.__file__)
 spectra_filename = os.path.join(sim_path, "../spec/bs7_100kspec.h5")
@@ -141,6 +141,7 @@ if args.sad:
     if args.p9:
         data_sf = struct_fact_special.load_p9()
     elif args.bs7 or args.bs7real:
+        #data_sf = utils.open_flex("../sf/bs7_real_scaled.pkl")
         data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
             "./4bs7.pdb", 
             yb_scatter_name="../sf/scanned_fp_fdp.npz")
@@ -452,6 +453,7 @@ for i_data in shot_range:
         fout.create_dataset("xtal_size_mm", data=xtal_size_mm)
         fout.create_dataset("spot_scale", data=spot_scale)
         fout.create_dataset("gain", data=GAIN)
+        fout.create_dataset("randnums", data=randnums)
         fout.close()
 
     print("Rank %d: DonDonee" % rank)
