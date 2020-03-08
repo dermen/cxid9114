@@ -1,5 +1,9 @@
 
 import cPickle
+from scipy.signal import savgol_filter
+import matplotlib
+import pylab as plt
+
 import numpy as np
 from dials.array_family import flex
 from dxtbx.imageset import MemReader #, MemMasker
@@ -358,4 +362,127 @@ def compute_r_factor_binned(F1, F2, Hi_index=None, ucell=(79.1, 79., 38, 90, 90,
         ret = ret, ccanom
 
     return ret
+
+
+def psana_data_to_aaron64_data(data, as_flex=False):
+    """
+    :param data:  32 x 185 x 388 cspad data
+    :return: 64 x 185 x 194 cspad data
+    """
+    asics = []
+    # check if necessary to convert to float 64
+    dtype = data.dtype
+    if as_flex and dtype != np.float64:
+        dtype = np.float64
+    for split_asic in [(asic[:, :194], asic[:, 194:]) for asic in data]:
+        for sub_asic in split_asic:  # 185x194 arrays
+            if as_flex:
+                sub_asic = np.ascontiguousarray(sub_asic, dtype=dtype)  # ensure contiguous arrays for flex
+                sub_asic = flex.double(sub_asic)  # flex data beith double
+            asics.append(sub_asic)
+    if as_flex:
+        asics = tuple(asics)
+    return asics
+
+
+def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
+        low_x1=-10, low_x2 = 10, high_x1=-20, high_x2=20, Nhigh=1000,
+         Nlow=500, plot_details=False, verbose=False, before_and_after=False,
+         plot_metric=True, inplace=False):
+
+    if not inplace:
+        shot = shot_.copy()
+    else:
+        shot = shot_
+    if mask is not None:
+        is_low = gain*mask
+        is_high = (~gain)*mask
+    else:
+        is_low = gain
+        is_high = (~gain)
+
+    low_gain_pid = np.where([ np.any( is_low[i] ) for i in range(32)])[0]
+    high_gain_pid = np.where([ np.any( is_high[i] ) for i in range(32)])[0]
+
+    bins_low = np.linspace(low_x1, low_x2, Nlow)
+    bins_high = np.linspace(high_x1,high_x2,Nhigh)
+
+    xdata_low = bins_low[1:]*.5 + bins_low[:-1]*.5
+    xdata_high = bins_high[1:]*.5 + bins_high[:-1]*.5
+
+    if before_and_after:
+        before_low = []
+        after_low = []
+        before_high = []
+        after_high = []
+
+    common_mode_shifts = {}
+    for i_pan in low_gain_pid:
+        pixels = shot[i_pan][ is_low[i_pan] ]
+        Npix = is_low[i_pan].sum()
+        pix_hist = np.histogram( pixels, bins=bins_low, normed=True)[0]
+        smoothed_hist = savgol_filter( pix_hist, window_length=window_length,
+                                    mode='constant',polyorder=polyorder)
+        pk_val = np.argmax(smoothed_hist)
+        shift = xdata_low[pk_val ]
+        common_mode_shifts[ (i_pan, 'low') ] = shift
+        if plot_details:
+            plt.figure()
+            ax = plt.gca()
+            ax.plot( xdata_low, pix_hist, '.')
+            ax.plot( xdata_low, smoothed_hist, lw=2)
+            ax.plot( xdata_low-shift, smoothed_hist, lw=2)
+            ax.plot( shift, smoothed_hist[pk_val], 's', mfc=None, mec='Deeppink', mew=2 )
+            ax.set_title("Panel has %d pixels, Shift amount = %.3f"%( Npix, shift))
+            plt.show()
+        if verbose:
+            print("shifted panel %d by %.4f"% ( i_pan, shift))
+        if before_and_after:
+            before_low.append( pix_hist)
+            pix_hist_shifted = np.histogram( pixels-shift, bins=bins_low, normed=True)[0]
+            after_low.append( pix_hist_shifted)
+    for i_pan in high_gain_pid:
+        pixels = shot[i_pan][ is_high[i_pan] ]
+        Npix = is_high[i_pan].sum()
+        pix_hist = np.histogram( pixels, bins=bins_high, normed=True)[0]
+        smoothed_hist = savgol_filter( pix_hist, window_length=window_length,mode='constant', polyorder=polyorder)
+        pk_val=np.argmax(smoothed_hist)
+        shift = xdata_high[pk_val]
+        common_mode_shifts[ (i_pan, 'high') ] = shift
+        if plot_details:
+            plt.figure()
+            ax = plt.gca()
+            ax.plot( xdata_high, pix_hist, '.')
+            ax.plot( xdata_high, smoothed_hist, lw=2)
+            ax.plot( xdata_high-shift, smoothed_hist, lw=2)
+            ax.plot( shift,  smoothed_hist[pk_val], 's', mfc=None, mec='Deeppink', mew=2 )
+            ax.set_title("Panel has %d pixels, Shift amount = %.3f"%( Npix, shift))
+            plt.show()
+        if verbose:
+            print("shifted panel %d by %.4f"%(i_pan,shift))
+        if before_and_after:
+            before_high.append( pix_hist)
+            pix_hist_shifted = np.histogram( pixels-shift, bins=bins_high, normed=True)[0]
+            after_high.append( pix_hist_shifted)
+
+    for (i_pan,which), shift in common_mode_shifts.items():
+        if which =='low':
+            shot[i_pan][ is_low[i_pan]] = shot[i_pan][ is_low[i_pan]] - shift
+        if which == 'high':
+            shot[i_pan][ is_high[i_pan]] = shot[i_pan][ is_high[i_pan]] - shift
+    if verbose:
+        print("Mean shift: %.4f"%(np.mean(common_mode_shifts.values())))
+    if plot_metric:
+        print shot.shape, shot_.shape
+        plt.figure()
+        plt.plot( np.median( np.median(shot_,-1),-1), 'bo', ms=10, label='before')
+        plt.plot( np.median( np.median(shot,-1),-1), 's', ms=10,color='Darkorange', label='after')
+        plt.legend()
+        plt.show()
+    if inplace:
+        return
+    elif before_and_after:
+        return xdata_low, before_low, after_low, xdata_high, before_high, after_high, shot
+    else:
+        return shot
 
