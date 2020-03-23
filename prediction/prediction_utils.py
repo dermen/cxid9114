@@ -19,7 +19,7 @@ def refls_to_q(refls, detector, beam, update_table=False):
     orig_vecs = {}
     fs_vecs = {}
     ss_vecs = {}
-    u_pids = set([r['panel'] for r in refls])
+    u_pids = set(refls['panel'])
     for pid in u_pids:
         orig_vecs[pid] = np.array(detector[pid].get_origin())
         fs_vecs[pid] = np.array(detector[pid].get_fast_axis())
@@ -27,7 +27,10 @@ def refls_to_q(refls, detector, beam, update_table=False):
 
     s1_vecs = []
     q_vecs = []
-    for r in refls:
+    panels = refls["panel"]
+    n_refls = len(refls)
+    for i_r in range(n_refls):
+        r = refls[i_r]
         pid = r['panel']
         i_fs, i_ss, _ = r['xyzobs.px.value']
         panel = detector[pid]
@@ -104,7 +107,6 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     :return:  bound boxes of the spots on the detector, alternatively also returns the matplotlib patches
     """
     if ret_patches:
-        import matplotlib as mpl
         import pylab as plt
     if ret_Pvals:
         assert data is not None
@@ -125,7 +127,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     for r in refls_at_colors:
         rpp = refls_by_panelname(r)
         for panel_id in rpp:
-            fast, slow = detector[panel_id].get_image_size()
+            fast, slow = detector[int(panel_id)].get_image_size()  # int casting necessary in Py3
             mask = strong_spot_mask_dials(rpp[panel_id], (slow, fast),
                                    as_composite=True)
             if panel_masks[panel_id] is None:
@@ -229,7 +231,7 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
         j1 = int(max(y_com - delrad/2., 0))
         j2 = int(min(y_com + delrad/2., ss_dim))
 
-        mask_region = panel_masks[pid][j1:j2, i1:i2]
+        mask_region = panel_masks[PID][j1:j2, i1:i2]
         bbox_masks.append(mask_region)
         bboxes.append((i1, i2, j1, j2))   # i is fast scan, j is slow scan
 
@@ -268,9 +270,6 @@ def get_prediction_boxes(refls_at_colors, detector, beams_of_colors, crystal,
     assert len(all_kept_Hi) == len(bboxes) == len(panel_ids)
 
     if ret_patches:
-        #patch_coll = mpl.collections.PatchCollection(patches,
-        #                  match_original=True)
-        #return_lst.append(patch_coll)
         return_lst.append(patches)
     if ret_Pvals:
         return_lst += [all_spot_Pterms, all_spot_Pterms_color_idx, integrated_Hi]
@@ -328,7 +327,7 @@ def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids
             mask = filter(img, **kwargs) > thresh
         else:
             mask = img > thresh
-        img_sz = detector[pid].get_image_size()
+        img_sz = detector[int(pid)].get_image_size()  # for some reason the int cast is necessary in Py3
         flex_img = flex.double(img)
         flex_img.reshape(flex.grid(img_sz))
 

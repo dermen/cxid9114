@@ -60,8 +60,8 @@ def compare_sims(SIM1, SIM2):
               for (name, value) in inspect.getmembers(nanoBragg, isprop)
               if name not in bad_params]
 
-    print "Did not try to get these parameters:"
-    print bad_params
+    print ("Did not try to get these parameters:")
+    print (bad_params)
 
     failed = []
     for p in params:
@@ -73,14 +73,14 @@ def compare_sims(SIM1, SIM2):
             else:
                 params_are_equal = param_value1 == param_value2
             if not params_are_equal:
-                print p, param_value1
-                print p, param_value2
-                print
+                print( p, param_value1)
+                print( p, param_value2)
+                print("\n")
         except ValueError:
             failed.append(p)
 
-    print "Failed to get these parameters:"
-    print failed
+    print ("Failed to get these parameters:")
+    print (failed)
 
 def print_parameters(SIM):
     """
@@ -96,20 +96,20 @@ def print_parameters(SIM):
               for (name, value) in inspect.getmembers(nanoBragg, isprop)
               if name not in bad_params]
 
-    print "Did not try to get these parameters:"
-    print bad_params
+    print("Did not try to get these parameters:")
+    print(bad_params)
 
     failed = []
     for p in params:
         try:
             param_value = getattr(SIM, p)
-            print p, param_value
-            print
+            print(p, param_value)
+            print("\n")
         except ValueError:
             failed.append(p)
 
-    print "Failed to get these parameters:"
-    print failed
+    print("Failed to get these parameters:")
+    print(failed)
 
 
 def Amatrix_dials2nanoBragg(crystal):
@@ -128,7 +128,8 @@ class PatternFactory:
                  Ncells_abc=(10,10,10), Gauss=False, oversample=0, panel_id=0,
                  recenter=True, verbose=10, profile=None, device_Id=None,
                  beamsize_mm=.004, exposure_s=1, progress_meter=False,
-                 crystal_size_mm=None, adc_offset=0, master_scale=None,amorphous_sample_thick_mm=0.005):
+                 crystal_size_mm=None, adc_offset=0, master_scale=None,amorphous_sample_thick_mm=0.005,
+                 printout_pix=None):
 
         self.amorphous_sample_thick_mm = amorphous_sample_thick_mm
         self.beam = beam
@@ -139,6 +140,8 @@ class PatternFactory:
         self.panel_id = panel_id
 
         self.SIM2 = nanoBragg(self.detector, self.SIM_init_beam, verbose=verbose, panel_id=panel_id)
+        if printout_pix is not None:
+            self.SIM2.printout_pixel_fastslow = printout_pix
         if oversample > 0:
             self.SIM2.oversample = oversample
         self.SIM2.Ncells_abc = Ncells_abc  # important to set this First!
@@ -233,7 +236,7 @@ class PatternFactory:
                 pass
 
         if isinstance(F, cctbx.miller.array):
-            self.SIM2.Fhkl = F.as_amplitude_array() #amplitudes()
+            self.SIM2.Fhkl = F#.as_amplitude_array() #amplitudes()
         elif F is not None:
             self.SIM2.default_F = F
         
@@ -271,6 +274,7 @@ class PatternFactory:
                 else:
                     self.SIM2.add_nanoBragg_spots()
 
+
             self.SIM2.raw_pixels = self.SIM2.raw_pixels*boost
         
         if add_water:  # add water for full panel, ignoring ROI
@@ -301,7 +305,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                beamsize_mm=0.001, exposure_s=None, accumulate=False, only_water=False, 
                add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None,
                amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None,
-               one_sf_array=False):
+               one_sf_array=False, printout_pix=None, time_panels=False):
 
     Npan = len(detector)
     Nchan = len(energies)
@@ -324,6 +328,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
         pids = range(Npan)
 
     for ii, i_pan in enumerate(pids):
+        if time_panels:
+            tstart = time.time()
         PattF = PatternFactory(detector=detector,
                                crystal=crystal,
                                beam=beam,
@@ -340,7 +346,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                                crystal_size_mm=crystal_size_mm,
                                adc_offset=adc_offset, 
                                master_scale=master_scale,
-                               amorphous_sample_thick_mm=amorphous_sample_thick_mm)
+                               amorphous_sample_thick_mm=amorphous_sample_thick_mm,
+                               printout_pix=printout_pix)
         
         if not only_water:
             PattF.adjust_mosaicity(mos_dom, mos_spread)
@@ -399,6 +406,9 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
        
         if free_all: 
             PattF.SIM2.free_all()
+        if time_panels:
+            tsim = time.time() - tstart
+            print("Panel%d took %f sec" % (i_pan, tsim))
 
     if gimmie_Patt:
         return panel_imgs, PattF
