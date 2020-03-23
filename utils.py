@@ -1,5 +1,5 @@
 
-import cPickle
+from six.moves import cPickle
 from scipy.signal import savgol_filter
 import matplotlib
 import pylab as plt
@@ -420,7 +420,7 @@ def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
     for i_pan in low_gain_pid:
         pixels = shot[i_pan][ is_low[i_pan] ]
         Npix = is_low[i_pan].sum()
-        pix_hist = np.histogram( pixels, bins=bins_low, normed=True)[0]
+        pix_hist = np.histogram( pixels, bins=bins_low, density=True)[0]
         smoothed_hist = savgol_filter( pix_hist, window_length=window_length,
                                     mode='constant',polyorder=polyorder)
         pk_val = np.argmax(smoothed_hist)
@@ -439,12 +439,12 @@ def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
             print("shifted panel %d by %.4f"% ( i_pan, shift))
         if before_and_after:
             before_low.append( pix_hist)
-            pix_hist_shifted = np.histogram( pixels-shift, bins=bins_low, normed=True)[0]
+            pix_hist_shifted = np.histogram( pixels-shift, bins=bins_low, density=True)[0]
             after_low.append( pix_hist_shifted)
     for i_pan in high_gain_pid:
         pixels = shot[i_pan][ is_high[i_pan] ]
         Npix = is_high[i_pan].sum()
-        pix_hist = np.histogram( pixels, bins=bins_high, normed=True)[0]
+        pix_hist = np.histogram( pixels, bins=bins_high, density=True)[0]
         smoothed_hist = savgol_filter( pix_hist, window_length=window_length,mode='constant', polyorder=polyorder)
         pk_val=np.argmax(smoothed_hist)
         shift = xdata_high[pk_val]
@@ -462,7 +462,7 @@ def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
             print("shifted panel %d by %.4f"%(i_pan,shift))
         if before_and_after:
             before_high.append( pix_hist)
-            pix_hist_shifted = np.histogram( pixels-shift, bins=bins_high, normed=True)[0]
+            pix_hist_shifted = np.histogram( pixels-shift, bins=bins_high, density=True)[0]
             after_high.append( pix_hist_shifted)
 
     for (i_pan,which), shift in common_mode_shifts.items():
@@ -473,7 +473,7 @@ def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
     if verbose:
         print("Mean shift: %.4f"%(np.mean(common_mode_shifts.values())))
     if plot_metric:
-        print shot.shape, shot_.shape
+        print (shot.shape, shot_.shape)
         plt.figure()
         plt.plot( np.median( np.median(shot_,-1),-1), 'bo', ms=10, label='before')
         plt.plot( np.median( np.median(shot,-1),-1), 's', ms=10,color='Darkorange', label='after')

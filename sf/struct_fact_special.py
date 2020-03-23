@@ -30,10 +30,14 @@ class Yb_scatter:
         self.sas_tbl = sasaki.table("Yb")
 
     def _load(self):
-        self.data = np.load(self.input_file)
-        self.ev_range = self.data["ev_range"]
-        self.fp_raw = self.data["fp"]
-        self.fdp_raw = self.data["fdp"]
+        if self.input_file.endswith("tsv"):
+            self.ev_range, self.fp_raw, self.fdp_raw = np.loadtxt(self.input_file).T
+        else:
+            self.data = np.load(self.input_file)
+            self.ev_range = self.data["ev_range"]
+            self.fp_raw = self.data["fp"]
+            self.fdp_raw = self.data["fdp"]
+
         self.fp_I = interp1d(self.ev_range, self.fp_raw, kind='linear')
         self.fdp_I = interp1d(self.ev_range, self.fdp_raw, kind='linear')
         self.loaded = True
@@ -273,7 +277,7 @@ def karle_hendrickson_unknowns(d_min=1.5):
     sc = xr.scatterers()
     sym = [s.element_symbol() for s in sc]
 
-    print "Computing F total"
+    print("Computing F total")
     Ft = xr.structure_factors(d_min=d_min,
                                algorithm='fft',
                                anomalous_flag=True).f_calc()
@@ -285,7 +289,7 @@ def karle_hendrickson_unknowns(d_min=1.5):
     yb_xr = xr.select(yb_sel)
     yb_sc = yb_xr.scatterers()
 
-    print "Computing F heavy"
+    print("Computing F heavy")
     Fh = yb_xr.structure_factors(d_min=d_min,
                                algorithm='fft',
                                anomalous_flag=True).f_calc()
