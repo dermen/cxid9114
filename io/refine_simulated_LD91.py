@@ -430,6 +430,8 @@ class FatData:
             if args.noiseless:
                 noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
                 img_handle = numpy_load(noiseless_path)
+            else:
+                img_handle = numpy_load(npz_path)
 
             img = img_handle["img"]
 
