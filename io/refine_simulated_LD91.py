@@ -41,6 +41,7 @@ if rank == 0:
     parser.add_argument("--cella", default=None, type=float)
     parser.add_argument("--gradientonly", action='store_true')
     parser.add_argument("--cellc", default=None, type=float)
+
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--preopttag", default="preopt", type=str)
@@ -49,9 +50,13 @@ if rank == 0:
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
+    parser.add_argument("--bgoffsetonly", action="store_true")
+    parser.add_argument("--fcellsigmascale", type=float, default=None)
+    parser.add_argument("--bgoffsetpositive", action="store_true")
     parser.add_argument("--noiseless", action="store_true")
     parser.add_argument("--optoutname", type=str, default=None)
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
+    parser.add_argument("--spotstride", type=int, default=10, help='plot stride for spots on an image')
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--setuponly", action='store_true')
     parser.add_argument('--filterbad', action='store_true')
@@ -97,7 +102,6 @@ if rank == 0:
     parser.add_argument("--Fobs", type=str, required=True)
     parser.add_argument("--Fref", type=str, default=None)
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
-    parser.add_argument("--plotstats", action="store_true")
     parser.add_argument("--fcell", nargs="+", default=None, type=int)
     parser.add_argument("--ncells", nargs="+", default=None, type=int)
     parser.add_argument("--scale", nargs="+", default=None, type=int)
@@ -264,6 +268,7 @@ class FatData:
         self.all_proc_fnames = {}
         self.nbbeam = self.nbcryst = None
         self.miller_data_map = None
+        self.shot_originZ_init = {}
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
@@ -602,6 +607,9 @@ class FatData:
             self.all_Hi_asu[img_num] = Hi_asu
             self.all_proc_idx[img_num] = proc_file_idx
             self.all_shot_idx[img_num] = shot_idx  # this is the index of the shot in the process*h5 file
+            # NOTE all originZ for each panel are the same in the simulated data.. Not necessarily true for real data
+            shot_originZ = self.SIM.detector[0].get_origin()[2]
+            self.shot_originZ_init[img_num] = shot_originZ
 
         for h in self.my_open_files.values():
             h.close()
@@ -799,10 +807,12 @@ class FatData:
                 shot_asu=self.all_Hi_asu,
                 global_param_idx_start=self.local_unknowns_across_all_ranks,
                 shot_panel_ids=self.all_panel_ids,
-                log_of_init_crystal_scales=self.log_of_init_crystal_scales,
+                log_of_init_crystal_scales=None,  # self.log_of_init_crystal_scales,
                 all_crystal_scales=self.all_crystal_scales,
-                perturb_fcell=False,
-                global_ncells=args.globalNcells, global_ucell=args.globalUcell)
+                global_ncells=args.globalNcells,
+                global_ucell=args.globalUcell,
+                global_originZ=True,
+                shot_originZ_init=self.shot_originZ_init)
 
             if trials['bmatrix'] is not None:
                 self.RUC.refine_Bmatrix = bool(trials["bmatrix"][i_trial])
@@ -828,6 +838,8 @@ class FatData:
             self.RUC.binner_nbin = 10
             self.RUC.merge_stat_frequency = 1
             self.RUC.print_resolution_bins = True
+            if args.fcellsigmascale is not None:
+                self.RUC.fcell_sigma_scale = args.fcellsigmascale
 
             n_shots = len(self.all_xrel)
             self.RUC.rescale_params = True
@@ -841,7 +853,6 @@ class FatData:
             self.RUC.refine_rotZ = not args.fixrotZ
             self.RUC.plot_images = args.plot
             self.RUC.plot_residuals = args.residual
-            self.RUC.plot_statistics = args.plotstats
             self.RUC.setup_plots()
 
             self.RUC.log_fcells = True
@@ -850,7 +861,7 @@ class FatData:
 
             self.RUC.idx_from_asu = self.idx_from_asu
             self.RUC.asu_from_idx = self.asu_from_idx
-            self.RUC.scale_r1 = args.scaleR1
+            self.RUC.scale_r1 = True  #args.scaleR1
             self.RUC.request_diag_once = False
             self.RUC.S = self.SIM
             self.RUC.restart_file = args.restartfile
@@ -859,24 +870,30 @@ class FatData:
             self.RUC.trad_conv = True
             self.RUC.fcell_bump = args.fcellbump
             self.RUC.refine_detdist = False
-            self.RUC.S.D.update_oversample_during_refinement = False
+            self.RUC.S.D.update_oversample_during_refinement = False  # NOTE
             self.RUC.refine_gain_fac = False
             self.RUC.use_curvatures = False  # args.curvatures
             self.RUC.use_curvatures_threshold = args.numposcurvatures
             self.RUC.calc_curvatures = args.curvatures
             self.RUC.poisson_only = args.poissononly
             self.RUC.plot_stride = args.stride
+            self.RUC.plot_spot_stride = args.spotstride
             self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
             self.RUC.verbose = False
             self.RUC.use_rot_priors = False
             self.RUC.use_ucell_priors = False
             self.RUC.filter_bad_shots = args.filterbad
+            if not args.curvatures:
+                self.RUC.S.D.compute_curvatures = False
             # TODO optional properties.. make this obvious
             self.RUC.FNAMES = self.all_fnames
             self.RUC.PROC_FNAMES = self.all_proc_fnames
+            self.RUC.bg_offset_positive = args.bgoffsetpositive
+            self.RUC.bg_offset_only = args.bgoffsetonly
             self.RUC.PROC_IDX = self.all_proc_idx
             self.RUC.Hi = self.all_Hi
             self.RUC.output_dir = args.outdir
+            self.RUC.big_dump = False
 
             if args.verbose:
                 if rank == 0:  # only show refinement stats for rank 0
@@ -1051,7 +1068,7 @@ ang_res = comm.reduce(ang_res, MPI.SUM, root=0)
 if comm.rank == 0:
     miss = [a for a in ang_res if a > 0]
 
-    print "INIT MISSETS\n%s" % ", ".join(map(str, ang_res))
+    print("INIT MISSETS\n%s" % ", ".join(map(str, ang_res)))
     print("INITIAL MEDIAN misset = %f" % np.median(miss))
     print("INITIAL MAX misset = %f" % np.max(miss))
     print("INITIAL MIN misset = %f" % np.min(miss))
