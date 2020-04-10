@@ -140,7 +140,8 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    from cxid9114.geom.multi_panel import CSPAD
+    #from cxid9114.geom.multi_panel import CSPAD
+    from cxid9114.geom.noHierarchy import CSPAD
     from cctbx.array_family import flex
 
     flex_double = flex.double
@@ -227,7 +228,6 @@ if has_mpi:
     getrusage = comm.bcast(getrusage, root=0)
     RUSAGE_SELF = comm.bcast(RUSAGE_SELF, root=0)
     TetragonalManager = comm.bcast(TetragonalManager, root=0)
-
 
 class FatData:
 
@@ -466,7 +466,6 @@ class FatData:
             n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
             is_a_keeper = h["bboxes"]["%s%d" % (args.keeperstag, shot_idx)][()]
-
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
             # miller indices (not yet reduced by symm equivs)
@@ -612,6 +611,7 @@ class FatData:
             # NOTE all originZ for each panel are the same in the simulated data.. Not necessarily true for real data
             shot_originZ = self.SIM.detector[0].get_origin()[2]
             self.shot_originZ_init[img_num] = shot_originZ
+            print(img_num)
 
         for h in self.my_open_files.values():
             h.close()
@@ -846,7 +846,7 @@ class FatData:
             n_shots = len(self.all_xrel)
             self.RUC.rescale_params = True
             self.RUC.spot_scale_init = [1]*n_shots
-            self.RUC.m_init = args.Ncells_size[0]
+            self.RUC.m_init = args.Ncells_size
             self.RUC.ucell_inits = self.all_ucell_mans[0].variables
 
             self.RUC.trial_id = i_trial
@@ -895,6 +895,7 @@ class FatData:
             self.RUC.PROC_IDX = self.all_proc_idx
             self.RUC.Hi = self.all_Hi
             self.RUC.output_dir = args.outdir
+            self.RUC.pause_after_iteration = 1.5
             self.RUC.big_dump = False
 
             if args.verbose:
@@ -927,6 +928,7 @@ class FatData:
 
             else:
                 self.RUC.run(setup_only=args.setuponly)
+                #embed()
                 if self.RUC.hit_break_to_use_curvatures:
                     self.RUC.num_positive_curvatures = 0
                     self.RUC.use_curvatures = True

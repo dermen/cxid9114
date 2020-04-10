@@ -14,6 +14,7 @@ parser.add_argument("--unitcell", nargs=6, type=float, default=None,
                     help="space separated unit cell e.g. --unitcell 79 79 38 90 90 90")
 args = parser.parse_args()
 
+from simtbx.diffBragg.utils import map_hkl_list
 import h5py
 import glob
 import numpy as np
@@ -37,12 +38,12 @@ for f in fnames:
     shots = h5["Hi"].keys()
     Hi = np.vstack([h5["Hi"][s] for s in shots])
     #res = np.hstack([h5["resolution"][s] for s in shots])
-    all_Hi.extend(map(tuple, Hi))
+    all_Hi.extend(list(map(tuple, Hi)))
     #all_res.append(res)
-    print f, len(shots)
+    print (f, len(shots))
 
 # unique asu Hi:
-u_all_Hi = list(set(utils.map_hkl_list(all_Hi, symbol=args.symbol)))
+u_all_Hi = list(set(map_hkl_list(all_Hi, symbol=args.symbol)))
 
 # Load the cctbx.xfel.merge output for estimation of initial params    
 if args.mtzinput:
@@ -51,7 +52,7 @@ if args.mtzinput:
 else:
     F = utils.open_flex(args.merge)#.as_amplitude_array()
 Fmap = {h: amp for h, amp in zip(F.indices(), F.data())}
-merge_Hi = list(set(utils.map_hkl_list(Fmap.keys(), symbol=args.symbol)))
+merge_Hi = list(set(map_hkl_list(Fmap.keys(), symbol=args.symbol)))
 
 symm = symmetry(unit_cell=(a, b, c, al, be, ga), space_group_symbol=args.symbol)
 

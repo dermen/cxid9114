@@ -2,8 +2,6 @@
 
 from argparse import ArgumentParser
 
-
-
 parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
@@ -269,6 +267,7 @@ for i_shot in range(Nexper):
     # group predictions bty panel name
     refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
     for panel_id in refls_predict_bypanel:
+        panel_id = int(panel_id)
         fast, slow = DET[panel_id].get_image_size()
         mask = prediction_utils.strong_spot_mask_dials(refls_predict_bypanel[panel_id], (slow, fast),
                                       as_composite=True)
@@ -298,6 +297,7 @@ for i_shot in range(Nexper):
     # group the refls by panel ID
     refls_strong_perpan = prediction_utils.refls_by_panelname(refls_strong)
     for panel_id in refls_strong_perpan:
+        panel_id = int(panel_id)
         fast, slow = DET[panel_id].get_image_size()
         mask = prediction_utils.strong_spot_mask_dials(
             refls_strong_perpan[panel_id], (slow, fast),
@@ -419,17 +419,17 @@ for i_shot in range(Nexper):
         rpp = prediction_utils.refls_by_panelname(refls_predict)
         # get nanoBragg spot prediction positions
         if _pid in rpp:
-            x, y, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(rpp[_pid]))
+            x, y, _ = list(map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(rpp[_pid])))
 
         # get strong spot pos
         _R_shot_strong_panel = _R_shot_strong.select(_R_shot_strong["panel"] == _pid)
         if len(_R_shot_strong_panel) > 0:
-            xstrong, ystrong, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_shot_strong_panel))
+            xstrong, ystrong, _ = list(map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_shot_strong_panel)))
 
         # get stills process prediction positions
         _R_panel = _R_shot.select(_R_shot["panel"] == _pid)
         if len(_R_panel) > 0:
-            x0, y0, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_panel))
+            x0, y0, _ = list(map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_panel)))
 
         #if list(x0) and list(x) and args.sanityplots:
         #    m = img_data[_pid].mean()
@@ -450,8 +450,8 @@ for i_shot in range(Nexper):
         #    plt.plot(xstrong, ystrong, 'go')
 
         if list(x0) and list(x):
-            tree = cKDTree(zip(x0, y0))
-            res = tree.query_ball_point(zip(x, y), r=0.9)
+            tree = cKDTree(list(zip(x0, y0)))
+            res = tree.query_ball_point(list(zip(x, y)), r=0.9)
             for i, r in enumerate(res):
                 miller_nano = rpp[_pid]["miller_index"][i]
                 if miller_nano[0] == 0 and miller_nano[1] == 0 and miller_nano[2] == 0:
@@ -466,9 +466,9 @@ for i_shot in range(Nexper):
                 if miller_stills != miller_nano:
                     #raise ValueError("nanoBragg and stills process give different miller index")
                     nmismatch += 1
-                    print "Bad: %s, %s" % (str(miller_stills), str(miller_nano))
+                    print ("Bad: %s, %s" % (str(miller_stills), str(miller_nano)))
 
-    bragg_hi += map(tuple, Hi)
+    bragg_hi += list(map(tuple, Hi))
     stills_hi += list(_R_shot["miller_index"])
     bragg_hi = list(set(bragg_hi))
     stills_hi = list(set(stills_hi))
@@ -563,6 +563,6 @@ for i_shot in range(Nexper):
     n_processed += 1
 
 writer.create_dataset("Amatrices", data=all_Amats, compression="lzf")
-writer.create_dataset("h5_path", data=all_paths, compression="lzf")
+writer.create_dataset("h5_path", data=np.array(all_paths, dtype="S"), compression="lzf")
 writer.close()
 
