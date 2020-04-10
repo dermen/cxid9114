@@ -21,7 +21,8 @@ from dxtbx.model.beam import BeamFactory
 
 beam_from_dict = BeamFactory.from_dict
 from simtbx.diffBragg.refiners.global_refiner import FatRefiner
-from cxid9114.utils import map_hkl_list, open_flex
+from cxid9114.utils import open_flex
+from simtbx.diffBragg.utils import map_hkl_list
 import sys
 from IPython import embed
 
@@ -38,6 +39,9 @@ if rank == 0:
     parser.add_argument("--unitcell", nargs=6, type=float, default=None,
                         help="space separated unit cell e.g. --unitcell 79 79 38 90 90 90")
     parser.add_argument("--gradientonly", action='store_true')
+    parser.add_argument("--fcellsigmascale", type=float, default=None)
+    parser.add_argument("--spotstride", type=int, default=10, help='plot stride for spots on an image')
+    parser.add_argument("--printresbins", action='store_true')
     parser.add_argument("--Nmos", default=1, type=int)
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--preopttag", default="preopt", type=str)
@@ -150,24 +154,14 @@ if rank == 0:
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
 
-    sf_path = os.path.dirname(struct_fact_special.__file__)
-    sfall_file = os.path.join(sf_path, "realspec_sfall.h5")
-    data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
     from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW
     import numpy as np
-
     np_log = np.log
-    # grab the structure factors at the edge energy (ENERGY_LOW=8944 eV)
-    edge_idx = np.abs(data_energies - ENERGY_LOW).argmin()
-    Fhkl_guess = data_sf[edge_idx]
-    wavelens = ENERGY_CONV / data_energies
-
     from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
 
 else:
     np_indices = None
     np_log = None
-    sf_path = None
     diff_rot = None
     flex_double = None
     compare_with_ground_truth = None
@@ -190,7 +184,6 @@ else:
     MonoclinicManager = None
     Crystal = None
     sqr = None
-    Fhkl_guess = wavelens = None
 
 if has_mpi:
     if rank == 0:
@@ -204,9 +197,6 @@ if has_mpi:
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
-    sf_path = comm.bcast(sf_path, root=0)
-    Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
-    wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
     sqr = comm.bcast(sqr, root=0)
     CSPAD = comm.bcast(CSPAD, root=0)
@@ -233,6 +223,7 @@ if has_mpi:
 
 import dxtbx
 from numpy import pi as PI
+import six
 
 class FatData:
 
@@ -278,6 +269,7 @@ class FatData:
         self.all_proc_fnames = {}
         self.nbbeam = self.nbcryst = None
         self.miller_data_map = None
+        self.shot_originZ_init = {}
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
@@ -305,6 +297,8 @@ class FatData:
         self.SIM.panel_id = 0  # default
         self.SIM.instantiate_diffBragg(default_F=0, oversample=args.oversample)
         self.SIM.D.spot_scale = 1e6
+        if args.unknownscale is not None:
+            self.SIM.D.spot_scale = args.unknownscale
         self.SIM.D.oversample_omega = False
 
     def _process_miller_data(self):
@@ -438,8 +432,15 @@ class FatData:
             img_path = h["h5_path"][shot_idx]
 
             # TODO am I 2D ? make me 3D ... am I tuple ? do I need integer e.g. get_raw_data(0)
+            if six.PY3:
+                img_path = img_path.decode("utf-8")
             loader = dxtbx.load(img_path)
-            img = loader.get_raw_data().as_numpy_array()
+            raw_data = loader.get_raw_data()
+            if isinstance(raw_data, tuple):
+                img = array([ p.as_numpy_array() for p in raw_data])
+            else:
+                img = loader.get_raw_data().as_numpy_array()
+
             if len(img.shape) == 2:  # if single panel
                 img = array([img])
 
@@ -602,6 +603,9 @@ class FatData:
             self.all_Hi_asu[img_num] = Hi_asu
             self.all_proc_idx[img_num] = proc_file_idx
             self.all_shot_idx[img_num] = shot_idx  # this is the index of the shot in the process*h5 file
+            shot_originZ = self.SIM.detector[0].get_origin()[2]
+            self.shot_originZ_init[img_num] = shot_originZ
+            print(img_num)
 
         for h in self.my_open_files.values():
             h.close()
@@ -787,12 +791,12 @@ class FatData:
                 shot_asu=self.all_Hi_asu,
                 global_param_idx_start=self.local_unknowns_across_all_ranks,
                 shot_panel_ids=self.all_panel_ids,
-                log_of_init_crystal_scales=self.log_of_init_crystal_scales,
+                log_of_init_crystal_scales=None,
                 all_crystal_scales=None,
-                perturb_fcell=False,
-                global_ncells=args.globalNcells, global_ucell=args.globalUcell,
-                global_originZ=args.globalZ,
-                shot_originZ_init=None,  # TODO
+                global_ncells=args.globalNcells, 
+                global_ucell=args.globalUcell,
+                global_originZ=True,
+                shot_originZ_init=self.shot_originZ_init,  # TODO
                 sgsymbol=self.symbol)
 
             if trials['bmatrix'] is not None:
@@ -821,13 +825,23 @@ class FatData:
             self.RUC.bg_offset_only = args.bgoffsetonly
             self.RUC.bg_offset_positive = args.bgoffsetonly
             self.RUC.print_all_missets = args.printallmissets
-            self.RUC.rot_scale = args.rotscale  # TODO make this work
+            self.RUC.merge_stat_frequency = 1
+            self.RUC.print_resolution_bins = args.printresbins 
+            
+            if args.fcellsigmascale is not None:
+                self.RUC.fcell_sigma_scale = args.fcellsigmascale 
+            
+            n_shots = len(self.all_xrel)
+            self.RUC.rescale_params = True
+            self.RUC.spot_scale_init = [1]*n_shots
+            self.RUC.m_init = args.Ncells_size
+            self.RUC.ucell_inits = self.all_ucell_mans[0].variables
+
+            
             self.RUC.Fref = self.Fhkl_ref
             self.RUC.refine_rotZ = not args.fixrotZ
             self.RUC.plot_images = args.plot
-            self.RUC.plot_fcell = args.plotfcell
             self.RUC.plot_residuals = args.residual
-            self.RUC.plot_statistics = args.plotstats
             self.RUC.setup_plots()
 
             self.RUC.log_fcells = True
@@ -836,22 +850,24 @@ class FatData:
 
             self.RUC.idx_from_asu = self.idx_from_asu
             self.RUC.asu_from_idx = self.asu_from_idx
-            self.RUC.scale_r1 = args.scaleR1
+            self.RUC.scale_r1 = True
             self.RUC.request_diag_once = False
             self.RUC.S = self.SIM
             self.RUC.restart_file = args.restartfile
             self.RUC.has_pre_cached_roi_data = True
             self.RUC.split_evaluation = False
             self.RUC.trad_conv = True
-            self.RUC.fcell_bump = args.fcellbump
-            self.RUC.refine_detdist = False
+            
             self.RUC.S.D.update_oversample_during_refinement = False
+            self.RUC.refine_detdist = False
             self.RUC.refine_gain_fac = False
+            
             self.RUC.use_curvatures = False  # args.curvatures
             self.RUC.use_curvatures_threshold = args.numposcurvatures
             self.RUC.calc_curvatures = args.curvatures
             self.RUC.poisson_only = args.poissononly
             self.RUC.plot_stride = args.stride
+            self.RUC.plot_spot_stride = args.spotstride  # TODO
             self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
             self.RUC.verbose = False
             self.RUC.use_rot_priors = False
@@ -862,6 +878,8 @@ class FatData:
             self.RUC.PROC_IDX = self.all_proc_idx
             self.RUC.Hi = self.all_Hi
             self.RUC.output_dir = args.outdir
+            self.RUC.pause_after_iteration = 1.5
+            self.RUC.big_dump = False
 
             if args.verbose:
                 if rank == 0:  # only show refinement stats for rank 0
@@ -995,12 +1013,11 @@ class FatData:
         possible_labels = []
         foundlabel = False
         for ma in miller_arrays:
-            label = ma.info().label_string
+            label = ma.info().label_string()
             possible_labels.append(label)
             if label == mtzlabel:
                 foundlabel = True
                 break
-
         assert foundlabel, "MTZ Label not found... \npossible choices: %s" % " ".join(possible_labels)
 
         return ma.as_amplitude_array()

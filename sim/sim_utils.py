@@ -2,6 +2,8 @@
 import inspect
 import numpy as np
 import time
+import six
+import sys
 
 import cctbx
 import scitbx
@@ -137,9 +139,9 @@ class PatternFactory:
         self.detector = detector
         self.crystal = crystal
         self.master_scale = master_scale
-        self.panel_id = panel_id
+        self.panel_id = int(panel_id)
 
-        self.SIM2 = nanoBragg(self.detector, self.SIM_init_beam, verbose=verbose, panel_id=panel_id)
+        self.SIM2 = nanoBragg(self.detector, self.SIM_init_beam, verbose=verbose, panel_id=int(panel_id))
         if printout_pix is not None:
             self.SIM2.printout_pixel_fastslow = printout_pix
         if oversample > 0:
@@ -170,7 +172,12 @@ class PatternFactory:
                 self.SIM2.xtal_shape = shapetype.Square
        
         if device_Id is not None: 
-            self.SIM2.device_Id = device_Id
+            if not isinstance(device_Id, int):
+                try:
+                    device_Id = int(device_Id)
+                except:
+                    raise ValueError("Device Id should be an integer!")
+            self.SIM2.device_Id = int(device_Id)
 
         self.SIM2.adc_offset = adc_offset
         self.SIM2.beamsize_mm = beamsize_mm
@@ -180,11 +187,13 @@ class PatternFactory:
         self.SIM2.verbose = verbose
         self.FULL_ROI = self.SIM2.region_of_interest
 
+        a = self.SIM2.beam_center_mm
         if recenter:  # FIXME: I am not sure why this seems to be necessary to preserve geom
-            #a = self.SIM2.beam_center_mm
-            #print "Beam center was:",a
-            self.SIM2.beam_center_mm = self.detector[panel_id].get_beam_centre(self.SIM_init_beam.get_s0())
-            #print "Now, beam center is ", self.SIM2.beam_center_mm, "Why is this happening???"
+            print ("Beam center was:",a)
+            self.SIM2.beam_center_mm = self.detector[int(panel_id)].get_beam_centre(self.SIM_init_beam.get_s0())
+            print ("Now, beam center is ", self.SIM2.beam_center_mm, "Why is this happening???")
+        else:
+            self.SIM2.beam_center_mm = a
 
         if self.beam_is_flexBeam:
             self.SIM2.xray_beams = self.beam
@@ -305,7 +314,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                beamsize_mm=0.001, exposure_s=None, accumulate=False, only_water=False, 
                add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None,
                amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None,
-               one_sf_array=False, printout_pix=None, time_panels=False):
+               one_sf_array=False, printout_pix=None, time_panels=False, recenter=True):
 
     Npan = len(detector)
     Nchan = len(energies)
@@ -334,7 +343,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                                crystal=crystal,
                                beam=beam,
                                panel_id=i_pan,
-                               recenter=True,
+                               recenter=recenter,
                                Gauss=Gauss,
                                verbose=verbose,
                                Ncells_abc=Ncells_abc,
@@ -408,7 +417,11 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
             PattF.SIM2.free_all()
         if time_panels:
             tsim = time.time() - tstart
-            print("Panel%d took %f sec" % (i_pan, tsim))
+            if six.PY3:
+                print("Panel%d took %f sec" % (i_pan, tsim), flush=True)
+            else:
+                print("Panel%d took %f sec" % (i_pan, tsim))
+                sys.stdout.flush()
 
     if gimmie_Patt:
         return panel_imgs, PattF

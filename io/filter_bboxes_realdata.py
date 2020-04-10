@@ -75,6 +75,7 @@ if has_mpi:
     args = comm.bcast(args, root=0)
 
 import dxtbx
+import six
 
 def get_memory_usage():
     """Return the memory usage in Mo."""
@@ -155,9 +156,15 @@ def main():
         # load the dxtbx image data directly:
         # NOTE: h5_path is really the image file path
         img_path = h["h5_path"][shot_idx]
-
+        if six.PY3:
+            img_path = img_path.decode("utf-8")
         loader = dxtbx.load(img_path)
-        img_data = loader.get_raw_data().as_numpy_array()
+        raw_data = loader.get_raw_data()
+        if isinstance(raw_data, tuple):
+            img_data = array([ p.as_numpy_array() for p in raw_data])
+        else:
+            img_data = loader.get_raw_data().as_numpy_array()
+
 
         bboxes = h["bboxes"]["shot%d" % shot_idx][()]
         panel_ids = h["panel_ids"]["shot%d" % shot_idx][()]
@@ -255,7 +262,7 @@ def main():
         tot_pix = [(j2 - j1) * (i2 - i1) for i_bb, (i1, i2, j1, j2) in enumerate(kept_bboxes)]
         Ntot += sum(tot_pix)
         if rank == 0:
-            print "%g total pixels (file %d / %d)" % (Ntot, img_num + 1, len(my_shots))
+            print ("%g total pixels (file %d / %d)" % (Ntot, img_num + 1, len(my_shots)))
         all_kept_bbox += map(list, kept_bboxes)
         all_is_kept_flags += [(fname_idx, shot_idx, is_a_keeper)]  # store this information, write to disk
 
@@ -264,7 +271,7 @@ def main():
         h.close()
 
     print("END OF LOOP")
-    print "Rank %d; total bboxes=%d; Total pixels=%g" % (rank, len(all_kept_bbox), Ntot)
+    print ("Rank %d; total bboxes=%d; Total pixels=%g" % (rank, len(all_kept_bbox), Ntot))
     all_kept_bbox = MPI.COMM_WORLD.gather(all_kept_bbox, root=0)
     all_is_kept_flags = MPI.COMM_WORLD.gather(all_is_kept_flags, root=0)
 

@@ -3,12 +3,10 @@
 from argparse import ArgumentParser
 
 
-
 parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
-parser.add_argument("--pause", type=float, default=0.5)
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--showcompleteness", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
@@ -32,6 +30,7 @@ parser.add_argument("--imgdirname", type=str, default=None)
 parser.add_argument("--indexdirname", type=str, default=None)
 parser.add_argument("--symbol", default="P43212", type=str)
 parser.add_argument("--sanityplots", action='store_true')
+parser.add_argument("--pause", type=float, default=0.5)
 args = parser.parse_args()
 
 GAIN = 28
@@ -86,6 +85,7 @@ if rank == 0:
         fig = plt.figure()
         ax = plt.gca()
 
+from cxid9114.geom.noHierarchy import CSPAD
 # Load in the reflection tables and experiment lists
 print ("Reading in the files")
 El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
@@ -176,7 +176,8 @@ for i_shot in range(Nexper):
     energies = [parameters.ENERGY_CONV/ave_wave]
 
     # grab the detector
-    DET = Exper.detector
+    #DET = Exper.detector
+    DET = CSPAD
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
     fs_dim, ss_dim = DET[0].get_image_size()
@@ -200,11 +201,11 @@ for i_shot in range(Nexper):
     mil_ar = miller.array(miller_set=miller_set, data=Famp).set_observation_type_xray_amplitude()
     FF = [mil_ar]
     # Optionally use a miller array from a model to do predictions, as opposed to a flat miller array
-    if args.miller is not None:
-        if args.miller == "bs7":
-            FF = [bs7_mil_ar]
-        if args.miller == "datasf":
-            FF = [datasf_mil_ar]
+    #if args.miller is not None:
+    #    if args.miller == "bs7":
+    #        FF = [bs7_mil_ar]
+    #    if args.miller == "datasf":
+    #        FF = [datasf_mil_ar]
 
     #   <><><><><><><><><><><><><><><><><><><><>
     #   DO THE SIMULATION TO USE FOR PREDICTIONS
@@ -220,7 +221,6 @@ for i_shot in range(Nexper):
         master_scale=1,
         exposure_s=exposure_s, beamsize_mm=beamsize, device_Id=device_Id,
         show_params=args.show_params, accumulate=False, crystal_size_mm=xtal_size)
-
 
     assert len(energies) == 1  # sanity check TODO remove
 
@@ -427,7 +427,7 @@ for i_shot in range(Nexper):
                 if miller_stills != miller_nano:
                     #raise ValueError("nanoBragg and stills process give different miller index")
                     nmismatch += 1
-                    print "Bad: %s, %s" % (str(miller_stills), str(miller_nano))
+                    print ("Bad: %s, %s" % (str(miller_stills), str(miller_nano)))
 
     bragg_hi += map(tuple, Hi)
     stills_hi += list(_R_shot["miller_index"])
