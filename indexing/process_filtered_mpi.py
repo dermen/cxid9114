@@ -218,7 +218,7 @@ for i_shot in range(Nexper):
         energies,
         FLUX, pids=None, profile=profile, cuda=True, oversample=1,
         Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
-        master_scale=1,
+        master_scale=1,recenter=True,
         exposure_s=exposure_s, beamsize_mm=beamsize, device_Id=device_Id,
         show_params=args.show_params, accumulate=False, crystal_size_mm=xtal_size)
 

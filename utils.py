@@ -1,5 +1,6 @@
 
 from six.moves import cPickle
+import six
 from scipy.signal import savgol_filter
 import matplotlib
 import pylab as plt
@@ -106,7 +107,15 @@ def datablock_from_numpyarrays(image, detector, beam, mask=None):
 def open_flex(filename):
     """unpickle the flex file which requires flex import"""
     with open(filename, "r") as f:
-        data = cPickle.load(f)
+        if six.PY3:
+            try:
+                from IPython import embed
+                embed()
+                data = cPickle.load(f.name)
+            except AttributeError:
+                data = cPickle.load(f)
+        else:
+            data = cPickle.load(f)
     return data
 
 

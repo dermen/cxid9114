@@ -73,7 +73,7 @@ def refls_to_hkl(refls, detector, beam, crystal,
     Ai = sqr(crystal.get_A()).inverse()
     Ai = Ai.as_numpy_array()
     HKL = np.dot( Ai, q_vecs.T)
-    HKLi = map( lambda h: np.ceil(h-0.5).astype(int), HKL)
+    HKLi = list(map( lambda h: np.ceil(h-0.5).astype(int), HKL))
     if update_table:
         refls['miller_index'] = flex.miller_index(len(refls),(0,0,0))
         mil_idx = flex.vec3_int(tuple(map(tuple, np.vstack(HKLi).T)))
