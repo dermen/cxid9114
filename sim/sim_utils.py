@@ -189,9 +189,10 @@ class PatternFactory:
 
         a = self.SIM2.beam_center_mm
         if recenter:  # FIXME: I am not sure why this seems to be necessary to preserve geom
-            print ("Beam center was:",a)
             self.SIM2.beam_center_mm = self.detector[int(panel_id)].get_beam_centre(self.SIM_init_beam.get_s0())
-            print ("Now, beam center is ", self.SIM2.beam_center_mm, "Why is this happening???")
+            
+            #print ("Beam center was:",a)
+            #print ("Now, beam center is ", self.SIM2.beam_center_mm, "Why is this happening???")
         else:
             self.SIM2.beam_center_mm = a
 
@@ -243,6 +244,8 @@ class PatternFactory:
                     self.SIM2.spot_scale = self.master_scale
             except AttributeError:
                 pass
+        else:
+            self.spot_scale = 1
 
         if isinstance(F, cctbx.miller.array):
             self.SIM2.Fhkl = F#.as_amplitude_array() #amplitudes()
@@ -417,11 +420,12 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
             PattF.SIM2.free_all()
         if time_panels:
             tsim = time.time() - tstart
-            if six.PY3:
-                print("Panel%d took %f sec" % (i_pan, tsim), flush=True)
-            else:
-                print("Panel%d took %f sec" % (i_pan, tsim))
-                sys.stdout.flush()
+            #if six.PY3:
+            #    print("Panel%d took %f sec" % (i_pan, tsim), flush=True)
+            #else:
+            #    print("Panel%d took %f sec" % (i_pan, tsim))
+            #    sys.stdout.flush()
+            print("Panel%d took %f sec" % (i_pan, tsim))
 
     if gimmie_Patt:
         return panel_imgs, PattF

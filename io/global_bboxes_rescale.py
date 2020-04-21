@@ -31,18 +31,20 @@ if rank == 0:
     parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2', 'syl3', 'kaladin'], default=None,
         help="different refinements")
     parser.add_argument("--readoutless", action="store_true")
+    parser.add_argument("--imagecorr", action="store_true")
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--fixrotZ", action='store_true')
     parser.add_argument("--Ncells_size", default=30, type=float)
     parser.add_argument("--cella", default=None, type=float)
-    parser.add_argument("--scipyfactr", default=1e7, type=float, help="Factor for terminating scipy lbfgs see \n https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.fmin_l_bfgs_b.html")
     parser.add_argument("--gradientonly", action='store_true') 
     parser.add_argument("--cellc", default=None, type=float)
     parser.add_argument("--Nmos", default=1, type=int)
+    parser.add_argument("--scipyfactr", default=1e7, type=float, help="Factor for terminating scipy lbfgs see \n https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.fmin_l_bfgs_b.html")
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--preopttag", default="preopt", type=str)
     parser.add_argument("--gainval", default=28, type=float)
     parser.add_argument("--curseoftheblackpearl", action="store_true")
+    parser.add_argument("--ignorelinelow", action="store_true")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
@@ -50,6 +52,7 @@ if rank == 0:
     parser.add_argument("--optoutname", type=str, default=None)
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
+    parser.add_argument("--bigdump", action="store_true")
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--setuponly", action='store_true')
     parser.add_argument('--filterbad', action='store_true')
@@ -67,6 +70,8 @@ if rank == 0:
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--p9", action="store_true")
+    parser.add_argument("--ucellsigma", default=0.005, type=float)
+    parser.add_argument("--rotXYZsigma", nargs=3,  default=[0.003, 0.003, 0.001], type=float)
     parser.add_argument("--bs7", action="store_true")
     parser.add_argument("--bs7real", action="store_true")
     parser.add_argument("--loadonly", action="store_true")
@@ -127,6 +132,7 @@ if rank == 0:
     from glob import glob
     from os import getpid
     from numpy import load as numpy_load
+    from numpy import exp as EXP
     from resource import getrusage
     from cxid9114.helpers import compare_with_ground_truth
     import resource
@@ -161,6 +167,7 @@ if rank == 0:
 
 else:
     np_indices = None
+    EXP = None
     np_log = None
     sf_path = None
     diff_rot = None
@@ -191,6 +198,7 @@ if has_mpi:
     if rank == 0:
         print("Broadcasting imports")
     #FatRefiner = comm.bcast(FatRefiner, root=0)
+    EXP = comm.bcast(EXP)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel)
     np_indices = comm.bcast(np_indices, root=0)
     np_log = comm.bcast(np_log, root=0)
@@ -435,6 +443,7 @@ class FatData:
         #    self.my_open_files[fidx] = h5py.File(fpath, "r")
         Ntot = 0
 
+        self.n_shots = len(my_shots)
         for img_num, (fname_idx, shot_idx) in enumerate(my_shots):
             #if img_num == args.Nmax:
             #    # print("Already processed maximum number images!")
@@ -758,7 +767,6 @@ class FatData:
         # Per image we have 3 rotation angles to refine
         n_rot_param = 3
 
-
         # by default we assume each shot refines its own ncells param (mosaic domain size Ncells_abc in nanoBragg)
         n_global_ncells_param = 0
         n_per_image_ncells_param = 1
@@ -900,7 +908,8 @@ class FatData:
                 log_of_init_crystal_scales=self.log_of_init_crystal_scales,
                 all_crystal_scales=self.all_crystal_scales,
                 perturb_fcell=args.perturbfcell,
-                global_ncells=args.globalNcells, global_ucell=args.globalUcell)
+                global_ncells=args.globalNcells, global_ucell=args.globalUcell,
+                shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)})
 
             if trials['bmatrix'] is not None:
                 self.RUC.refine_Bmatrix = bool(trials["bmatrix"][i_trial])
@@ -917,6 +926,28 @@ class FatData:
             if trials["max_calls"] is not None:
                 self.RUC.max_calls = trials["max_calls"][i_trial]
 
+
+            # parameter rescaling...
+            self.RUC.rescale_params = True
+            self.RUC.spot_scale_init = {img_num: EXP(self.log_of_init_crystal_scales[img_num]) \
+                                        for img_num in range(self.n_shots)}
+            self.RUC.m_init = args.Ncells_size 
+            self.RUC.ignore_line_search_failed_step_at_lower_bound = args.ignorelinelow
+            self.RUC.rotX_sigma = args.rotXYZsigma[0]
+            self.RUC.rotY_sigma = args.rotXYZsigma[1]
+            self.RUC.rotZ_sigma = args.rotXYZsigma[2]
+            self.RUC.ucell_sigmas = [args.ucellsigma, args.ucellsigma]
+            self.RUC.originZ_sigma = 0.01
+            self.RUC.m_sigma = 0.05
+            self.RUC.spot_scale_sigma = .01
+            self.RUC.a_sigma = 0.05
+            self.RUC.b_sigma = 0.05
+            self.RUC.c_sigma = 0.1
+            self.RUC.fcell_sigma_scale = 0.005
+            self.RUC.fcell_resolution_bin_Id = None
+            self.RUC.compute_image_model_correlation = args.imagecorr
+            # end of parameter rescaling
+
             # plot things
             self.RUC.gradient_only=args.gradientonly
             self.RUC.stpmax = args.stpmax
@@ -927,6 +958,7 @@ class FatData:
             self.RUC.trial_id = i_trial
             self.RUC.print_all_missets = args.printallmissets
             self.RUC.rot_scale = args.rotscale  # TODO make this work
+            self.RUC.print_all_corr = False
             self.RUC.Fref = self.Fhkl_ref
             self.RUC.refine_rotZ = not args.fixrotZ
             self.RUC.plot_images = args.plot
@@ -936,6 +968,7 @@ class FatData:
             self.RUC.setup_plots()
 
             self.RUC.log_fcells = True
+            self.RUC.big_dump = args.bigdump
             #FIXME in new code with per shot unit cell, this is broken..
             self.RUC.x_init = x_init
 

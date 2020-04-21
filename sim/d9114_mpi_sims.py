@@ -16,6 +16,7 @@ import argparse
 
 parser = argparse.ArgumentParser("make dadat")
 parser.add_argument("--savenoiseless", action="store_true")
+parser.add_argument("--optimizeoversample", action="store_true")
 parser.add_argument("--start", default=None, type=int)
 parser.add_argument("--stop", default=None, type=int)
 parser.add_argument("--sanity", action="store_true")
@@ -48,7 +49,6 @@ parser.add_argument("--write-img", dest='write_img', action='store_true')
 parser.add_argument('-N', dest='nodes', type=int, default=[1, 0], nargs=2, help="Number of nodes, and node id")
 parser.add_argument("-trials", dest='num_trials', help='trials per worker',
                     type=int, default=1)
-parser.add_argument("--optimize-oversample", action='store_true')
 parser.add_argument("--show-params", action='store_true')
 parser.add_argument("--p9", action="store_true")
 parser.add_argument("--bs7", action="store_true")
@@ -145,6 +145,7 @@ if args.sad:
         data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
             "./4bs7.pdb", 
             yb_scatter_name="../sf/scanned_fp_fdp.npz")
+        data_sf = data_sf.as_amplitude_array()
     else:
         data_sf = struct_fact_special.load_4bs7_sf()
     data_sf = [data_sf]
@@ -270,12 +271,17 @@ for i_data in shot_range:
         xtal_size_mm = np.random.normal(xtal_size_mm, args.xtal_size_jitter)
 
     sim_args = [crystal, DET, BEAM, data_sf, data_energies, data_fluxes]
+    #print(data_energies)
+    #from IPython import embed
+    #embed()
+    #exit()
 
     masterscale = args.masterscale
     if masterscale is not None:
         masterscale = np.random.normal(masterscale, args.masterscalejitter)
-    if masterscale < 0.1:  # FIXME: make me more smart
-         masterscale = 0.1
+    assert masterscale > 0
+    #if masterscale < 0.1:  # FIXME: make me more smart
+    #     masterscale = 0.1
     sim_kwargs = {'pids': None,
                   'profile': args.profile,
                   'cuda': cuda,
@@ -297,7 +303,7 @@ for i_data in shot_range:
                   'one_sf_array': True}  #data_sf[0] is not None and data_sf[1] is None}
 
     print ("Rank %d: SIULATING DATA IMAGE" % rank)
-    if args.optimize_oversample:
+    if args.optimizeoversample:
         oversample = 1
         reference = None
         while 1:
@@ -334,7 +340,7 @@ for i_data in shot_range:
             C.dxtbx_crystal = crystal
             C.mos_spread_deg = 0
             C.n_mos_domains = 1
-            C.miller_array = data_sf[0].as_amplitude_array()
+            C.miller_array = data_sf[0]
             C.thick_mm = xtal_size_mm
 
             B = nanoBragg_beam.nanoBragg_beam()
