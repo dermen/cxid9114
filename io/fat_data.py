@@ -83,7 +83,6 @@ if rank == 0:
     parser.add_argument("--loadstop", type=int, default=None)
     parser.add_argument("--ngroups", type=int, default=1)
     parser.add_argument("--groupId", type=int, default=0)
-    parser.add_argument("--perimage", action="store_true")
     parser.add_argument('--perturblist', default=None, type=int)
     parser.add_argument("--verbose", action='store_true')
     parser.add_argument("--forcemono", action='store_true')
@@ -103,7 +102,7 @@ if rank == 0:
     parser.add_argument("--partitiontime", default=5, type=float, help="seconds allowed for partitioning inputs")
     parser.add_argument("--Fobs", type=str, required=True)
     parser.add_argument("--Fref", type=str, default=None)
-    parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
+    parser.add_argument("--keeperstags", type=str, nargs="+", default=["keepers"], help="names of keepers selection flags")
     parser.add_argument("--plotstats", action="store_true")
     parser.add_argument("--fcell", nargs="+", default=None, type=int)
     parser.add_argument("--ncells", nargs="+", default=None, type=int)
@@ -248,7 +247,6 @@ class FatData:
         self.global_ucell_param = args.globalUcell
         self.time_load_start = 0
         self.fnames = []  # the filenames containing the datas
-        self.per_image_refine_first = args.perimage  # do a per image refinement of crystal model prior to doing the global fat
         self.all_spot_roi = {}  # one list per shot, rois are x1,x2,y1,y2 per reflection
         self.global_image_id = {}  # gives a  unique ID for each image so multiple ranks can process roi from same image
         self.all_abc_inits = {}  # one list per shot, abc_inits are a,b,c per reflection
@@ -272,6 +270,8 @@ class FatData:
         self.all_proc_fnames = {}
         self.nbbeam = self.nbcryst = None
         self.miller_data_map = None
+
+        self.reduced_bbox_keeper_flags = {}
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
@@ -351,7 +351,7 @@ class FatData:
                 shot_tuples += fidx_shotidx
 
                 # store the number of usable roi per shot in order to divide shots amongst ranks equally
-                roi_per += [sum(h5s[i_f]["bboxes"]["%s%d" % (args.keeperstag,i_shot)][()])
+                roi_per += [h5s[i_f]["bboxes"]["shot%d" % (i_shot)].shape[0] 
                             for i_shot in range(Nshots_per_file[i_f])]
 
             from numpy import array_split
@@ -428,7 +428,7 @@ class FatData:
                 start = args.loadstart
             my_shots = my_shots[start: start+self.Nload]
         print("Rank %d: I will load %d shots, first shot: %s, last shot: %s"
-              % (comm.rank, len(my_shots), my_shots[0], my_shots[-1]))
+              % (rank, len(my_shots), my_shots[0], my_shots[-1]))
 
         # open the unique filenames for this rank
         # TODO: check max allowed pointers to open hdf5 file
@@ -508,7 +508,6 @@ class FatData:
             bbox_dset = h["bboxes"]["shot%d" % shot_idx]
             n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
-            is_a_keeper = h["bboxes"]["%s%d" % (args.keeperstag, shot_idx)][()]
 
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
@@ -520,20 +519,43 @@ class FatData:
             except KeyError:
                 has_panels = False
 
-            # apply the filters:
+            # BEGIN bbox selection flag management
+            # only keep a shoebox if its potentially a keeper
+            # Here we provide a means for loading shoeboxes if and only if they
+            # will ever be simulated as determined by the keeper flags
+            # If a bound box is not flagged anywhere, it will be removed from memory
+            bbox_id = np.arange(n_bboxes_total)
+            is_a_keeper = np.zeros(n_bboxes_total).astype(bool)
+            kept_bbox_ids = {}
+            for keeperstag in set(args.keeperstags):
+                keeper_flags = h["bboxes"]["%s%d" % (keeperstag, shot_idx)][()]
+                is_a_keeper = np.logical_or(is_a_keeper, keeper_flags)
+                kept_bbox_ids[keeperstag] = bbox_id[keeper_flags]
+            
+            # The following provides a means for selecting the different subsets
+            # of ROIs based on the original keeper flags
+            all_kept_bbox_ids = bbox_id[is_a_keeper]
+            self.reduced_bbox_keeper_flags[img_num] = {}
+            for keeperstag in set(args.keeperstags):
+                flags = np.array([i in kept_bbox_ids[keeperstag] for i in all_kept_bbox_ids])
+                self.reduced_bbox_keeper_flags[img_num][keeperstag] = flags
+            # END selection flag management
+
+            # BEGIN apply the keeper filters:
             bboxes = [bbox_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             tilt_abc = [tilt_abc_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             Hi = [tuple(Hi_dset[i_bb]) for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             proc_file_idx = [i_bb for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
-
             if has_panels:
                 panel_ids = [panel_ids_dset[i_bb] for i_bb in range(n_bboxes_total) if is_a_keeper[i_bb]]
             else:
                 panel_ids = [0] * len(tilt_abc)
+            # END apply the keeper filters
 
-            # how many pixels do we have
+            # BEGIN counting pixels
             tot_pix = [(j2 - j1)*(i2 - i1) for i1, i2, j1, j2 in bboxes]
             Ntot += sum(tot_pix)
+            # END counting pixels
 
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             #h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
@@ -728,7 +750,7 @@ class FatData:
         if self.global_ucell_param:
             n_images = len(self.all_spot_roi)
             if args.cella is None and args.cellc is None:
-                if comm.rank == 0:
+                if rank == 0:
                     print ("Init global ucell without cella and cellc")
 
                 # TODO: implement for non tetragonal
@@ -736,20 +758,22 @@ class FatData:
                                                    for i in range(n_images)])
                 a_vals = list(a_vals)
                 c_vals = list(c_vals)
-                a_vals = comm.reduce(a_vals, MPI.SUM, root=0)
-                c_vals = comm.reduce(c_vals, MPI.SUM, root=0)
+                if has_mpi:
+                    a_vals = comm.reduce(a_vals, MPI.SUM, root=0)
+                    c_vals = comm.reduce(c_vals, MPI.SUM, root=0)
 
                 a_mean = c_mean = None
-                if comm.rank == 0:
+                if rank == 0:
                     a_mean = np.median(a_vals)
                     c_mean = np.median(c_vals)
-                a_mean = comm.bcast(a_mean, root=0)
-                c_mean = comm.bcast(c_mean, root=0)
+                if has_mpi:
+                    a_mean = comm.bcast(a_mean, root=0)
+                    c_mean = comm.bcast(c_mean, root=0)
             else:
                 a_mean = args.cella
                 c_mean = args.cellc
 
-            print ("Rank %d:  Updating ucell mean for each ucell manager to %.4f %.4f" % (comm.rank, a_mean, c_mean))
+            print ("Rank %d:  Updating ucell mean for each ucell manager to %.4f %.4f" % (rank, a_mean, c_mean))
             for i_shot in range(n_images):
                 self.all_ucell_mans[i_shot].variables = a_mean, c_mean
 
@@ -799,18 +823,22 @@ class FatData:
         # note: roi para
 
         # totals across ranks
-        n_images = comm.reduce(n_images, MPI.SUM, root=0)
-        n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
-        total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
+        if has_mpi:
+            n_images = comm.reduce(n_images, MPI.SUM, root=0)
+            n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
+            total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
 
         # Gather so that each rank knows exactly how many local unknowns are on the other ranks
-        local_unknowns_per_rank = comm.gather(self.n_local_unknowns)
+        if has_mpi:
+            local_unknowns_per_rank = comm.gather(self.n_local_unknowns)
 
-        if comm.rank == 0:
+        if rank == 0:
             total_local_unknowns = sum(local_unknowns_per_rank)  # across all ranks
         else:
             total_local_unknowns = None
-        self.local_unknowns_across_all_ranks = comm.bcast(total_local_unknowns, root=0)
+        self.local_unknowns_across_all_ranks = total_local_unknowns
+        if has_mpi:
+            self.local_unknowns_across_all_ranks = comm.bcast(self.local_unknowns_across_all_ranks, root=0)
 
         # TODO: what is the 2 for (its gain and detector distance which are not currently refined...
         self.n_global_params = 2 + n_global_ucell_param + n_global_ncells_param + self.num_hkl_global  # detdist and gain + ucell params
@@ -818,10 +846,13 @@ class FatData:
         self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
 
         # also report total memory usage
-        mem_tot = comm.reduce(mem, MPI.SUM, root=0)
+        mem_tot = mem
+        if has_mpi:
+            mem_tot = comm.reduce(mem_tot, MPI.SUM, root=0)
 
-        comm.Barrier()
-        if comm.rank == 0:
+        if has_mpi:
+            comm.Barrier()
+        if rank == 0:
             print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
             print("MPIWORLD TOTALZ: images=%d, spots=%d, pixels=%2.2g, Nlocal/Nglboal=%d/%d, usage=%2.2g GigaBytes"
                   % (n_images, n_spot_tot, total_pix, total_local_unknowns,self.n_global_params, mem_tot))
@@ -830,33 +861,33 @@ class FatData:
 
             # determine where in the global parameter array does this rank
             # parameters begin
-            starts_per_rank = {}
+            self.starts_per_rank = {}
             xpos = 0
             for _rank, n_unknown in enumerate(local_unknowns_per_rank):
-                starts_per_rank[_rank] = xpos
+                self.starts_per_rank[_rank] = xpos
                 xpos += n_unknown
         else:
-            starts_per_rank = None
+            self.starts_per_rank = None
 
-        self.starts_per_rank = comm.bcast(starts_per_rank, root=0)
+        if has_mpi:
+            self.starts_per_rank = comm.bcast(self.starts_per_rank, root=0)
 
     def _gather_Hi_information(self):
         nshots_on_this_rank = len(self.all_Hi)
-        H, Hasu = [], []
+        self.Hi_all_ranks, self.Hi_asu_all_ranks = [], []
         for i in range(nshots_on_this_rank):
-            H += self.all_Hi[i]
-            Hasu += self.all_Hi_asu[i]
+            self.Hi_all_ranks += self.all_Hi[i]
+            self.Hi_asu_all_ranks += self.all_Hi_asu[i]
 
         #print("Rank %d: Num miller vars on rank=%d" % (comm.rank, len(set(Hasu))))
-
-        Hi_all_ranks = comm.reduce(H, root=0)  # adding python lists concatenates them
-        self.Hi_all_ranks = comm.bcast(Hi_all_ranks, root=0)
-
-        Hi_asu_all_ranks = comm.reduce(Hasu, root=0)
-        self.Hi_asu_all_ranks = comm.bcast(Hi_asu_all_ranks, root=0)
+        if has_mpi:
+            self.Hi_all_ranks = comm.reduce(self.Hi_all_ranks, root=0)  # adding python lists concatenates them
+            self.Hi_all_ranks = comm.bcast(self.Hi_all_ranks, root=0)
+            self.Hi_asu_all_ranks = comm.reduce(self.Hi_asu_all_ranks, root=0)
+            self.Hi_asu_all_ranks = comm.bcast(self.Hi_asu_all_ranks, root=0)
 
         # after gather
-        if comm.rank == 0:
+        if rank == 0:
             print("Overall completeness\n<><><><><><><><>")
             uc = self.all_ucell_mans[0]
             from cctbx.array_family import flex as cctbx_flex
@@ -866,7 +897,7 @@ class FatData:
             mset = miller.set(symm, hi_flex_unique, anomalous_flag=True)
             mset.setup_binner(d_min=2, d_max=999, n_bins=10)
             mset.completeness(use_binning=True).show()
-            print("Rank %d: total miller vars=%d" % (comm.rank, len(set(Hi_asu_all_ranks))))
+            print("Rank %d: total miller vars=%d" % (rank, len(set(self.Hi_asu_all_ranks))))
 
 
         # this will map the measured miller indices to their index in the LBFGS parameter array self.x
@@ -874,177 +905,170 @@ class FatData:
         # we will need the inverse map during refinement to update the miller array in diffBragg, so we cache it here
         self.asu_from_idx = {i: h for i, h in enumerate(set(self.Hi_asu_all_ranks))}
 
-    def refine(self):
+    def pre_refine_setup(self, i_trial=0, refine_fcell=None, refine_spot_scale=None, refine_Umatrix=None, 
+            refine_Bmatrix=None, refine_ncells=None, refine_bg=None, max_calls=None, x_init=None):
 
-        trials = {"fcell": args.fcell,
-                  "scale": args.scale,
-                  "umatrix": args.umatrix,
-                  "bmatrix": args.bmatrix,
-                  "ncells": args.ncells,
-                  "bg": args.bg,
-                  "max_calls": args.maxcalls}
-
-        Ntrials = len(trials["max_calls"])
-
-        x_init = None
-        if args.xinitfile is not None:
-            x_init = flex_double(np_load(args.xinitfile)["x"])
+        self.RUC = FatRefiner(
+            n_total_params=self.n_total_unknowns,
+            n_local_params=self.n_local_unknowns,
+            n_global_params=self.n_global_params,
+            local_idx_start=self.starts_per_rank[rank],
+            shot_ucell_managers=self.all_ucell_mans,
+            shot_rois=self.all_spot_roi,
+            shot_nanoBragg_rois=self.all_nanoBragg_rois,
+            shot_roi_imgs=self.all_roi_imgs, shot_spectra=self.all_spectra,
+            shot_crystal_GTs=self.all_crystal_GT, shot_crystal_models=self.all_crystal_models,
+            shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
+            shot_asu=self.all_Hi_asu,
+            global_param_idx_start=self.local_unknowns_across_all_ranks,
+            shot_panel_ids=self.all_panel_ids,
+            log_of_init_crystal_scales=self.log_of_init_crystal_scales,
+            all_crystal_scales=self.all_crystal_scales,
+            perturb_fcell=args.perturbfcell,
+            global_ncells=args.globalNcells, global_ucell=args.globalUcell,
+            shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)})
         
-        for i_trial in range(Ntrials):
-            self.RUC = FatRefiner(
-                n_total_params=self.n_total_unknowns,
-                n_local_params=self.n_local_unknowns,
-                n_global_params=self.n_global_params,
-                local_idx_start=self.starts_per_rank[comm.rank],
-                shot_ucell_managers=self.all_ucell_mans,
-                shot_rois=self.all_spot_roi,
-                shot_nanoBragg_rois=self.all_nanoBragg_rois,
-                shot_roi_imgs=self.all_roi_imgs, shot_spectra=self.all_spectra,
-                shot_crystal_GTs=self.all_crystal_GT, shot_crystal_models=self.all_crystal_models,
-                shot_xrel=self.all_xrel, shot_yrel=self.all_yrel, shot_abc_inits=self.all_abc_inits,
-                shot_asu=self.all_Hi_asu,
-                global_param_idx_start=self.local_unknowns_across_all_ranks,
-                shot_panel_ids=self.all_panel_ids,
-                log_of_init_crystal_scales=self.log_of_init_crystal_scales,
-                all_crystal_scales=self.all_crystal_scales,
-                perturb_fcell=args.perturbfcell,
-                global_ncells=args.globalNcells, global_ucell=args.globalUcell,
-                shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)})
+        self.i_trial = i_trial
 
-            if trials['bmatrix'] is not None:
-                self.RUC.refine_Bmatrix = bool(trials["bmatrix"][i_trial])
-            if trials['umatrix'] is not None:
-                self.RUC.refine_Umatrix = bool(trials["umatrix"][i_trial])
-            if trials['fcell'] is not None:
-                self.RUC.refine_Fcell = bool(trials["fcell"][i_trial])
-            if trials['ncells'] is not None:
-                self.RUC.refine_ncells = bool(trials["ncells"][i_trial])
-            if trials['bg'] is not None:
-                self.RUC.refine_background_planes = bool(trials["bg"][i_trial])
-            if trials['scale'] is not None:
-                self.RUC.refine_crystal_scale = bool(trials["scale"][i_trial])
-            if trials["max_calls"] is not None:
-                self.RUC.max_calls = trials["max_calls"][i_trial]
+        if refine_Bmatrix is not None:
+            self.RUC.refine_Bmatrix = refine_Bmatrix 
+        if refine_Umatrix is not None:
+            self.RUC.refine_Umatrix = refine_Umatrix 
+        if refine_fcell is not None:
+            self.RUC.refine_Fcell = refine_fcell 
+        if refine_ncells is not None:
+            self.RUC.refine_ncells = refine_ncells 
+        if refine_bg is not None:
+            self.RUC.refine_background_planes = refine_bg
+        if refine_spot_scale is not None:
+            self.RUC.refine_crystal_scale = refine_spot_scale
+        if max_calls is not None:
+            self.RUC.max_calls = max_calls 
+
+        self.RUC.x_init = x_init
+        
+        # parameter rescaling...
+        self.RUC.rescale_params = True
+        
+        # FIXME
+        self.RUC.spot_scale_init = {img_num: EXP(self.log_of_init_crystal_scales[img_num]) \
+                                    for img_num in range(self.n_shots)}
+        # FIXME
+        self.RUC.m_init = args.Ncells_size 
+        self.RUC.ignore_line_search_failed_step_at_lower_bound = args.ignorelinelow
+        #FIXME 
+        self.RUC.ucell_inits = [self.all_ucell_mans[i_shot].variables for i_shot in range(self.n_shots)]
+        #FIXME
+        self.RUC.rotX_sigma = args.rotXYZsigma[0]
+        self.RUC.rotY_sigma = args.rotXYZsigma[1]
+        self.RUC.rotZ_sigma = args.rotXYZsigma[2]
+        self.RUC.ucell_sigmas = [args.ucellsigma, args.ucellsigma]
+        self.RUC.originZ_sigma = 0.01
+        self.RUC.m_sigma = 0.05
+        self.RUC.spot_scale_sigma = .01
+        self.RUC.a_sigma = 0.05
+        self.RUC.b_sigma = 0.05
+        self.RUC.c_sigma = 0.1
+        self.RUC.fcell_sigma_scale = 0.005
+        self.RUC.fcell_resolution_bin_Id = None
+        self.RUC.compute_image_model_correlation = args.imagecorr
+        # end of parameter rescaling
+
+        # plot things
+        self.RUC.gradient_only=args.gradientonly
+        self.RUC.stpmax = args.stpmax
+        self.RUC.debug = args.debug
+        self.RUC.binner_dmax = 999
+        self.RUC.binner_dmin = 2
+        self.RUC.binner_nbin = 10
+        self.RUC.trial_id = self.i_trial
+        self.RUC.print_all_missets = args.printallmissets
+        self.RUC.print_all_corr = False
+        self.RUC.Fref = self.Fhkl_ref
+        self.RUC.refine_rotZ = not args.fixrotZ
+        self.RUC.plot_images = args.plot
+        self.RUC.plot_fcell = args.plotfcell
+        self.RUC.plot_residuals = args.residual
+        self.RUC.plot_statistics = args.plotstats
+        self.RUC.setup_plots()
+
+        self.RUC.log_fcells = True
+        self.RUC.big_dump = args.bigdump
+
+        self.RUC.idx_from_asu = self.idx_from_asu
+        self.RUC.asu_from_idx = self.asu_from_idx
+        self.RUC.scale_r1 = args.scaleR1
+        self.RUC.request_diag_once = False
+        self.RUC.S = self.SIM
+        self.RUC.restart_file = args.restartfile
+        self.RUC.has_pre_cached_roi_data = True
+        self.RUC.trad_conv = True
+        self.RUC.fcell_bump = args.fcellbump
+        self.RUC.refine_detdist = False
+        self.RUC.S.D.update_oversample_during_refinement = False
+        self.RUC.refine_gain_fac = False
+        self.RUC.use_curvatures = False # args.curvatures
+        self.RUC.use_curvatures_threshold = args.numposcurvatures
+        if not args.curvatures:
+            self.RUC.S.D.compute_curvatures=False
+        self.RUC.calc_curvatures = args.curvatures
+        self.RUC.poisson_only = args.poissononly
+        self.RUC.plot_stride = args.stride
+        self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
+        self.RUC.verbose = False
+        self.RUC.use_rot_priors = False
+        self.RUC.use_ucell_priors = False
+        self.RUC.filter_bad_shots = args.filterbad
+        #TODO optional properties.. make this obvious
+        self.RUC.FNAMES = self.all_fnames
+        self.RUC.PROC_FNAMES = self.all_proc_fnames
+        self.RUC.PROC_IDX = self.all_proc_idx
+        self.RUC.Hi = self.all_Hi
+        self.RUC.output_dir = args.outdir
+        if args.verbose:
+            if rank == 0:  # only show refinement stats for rank 0
+                self.RUC.verbose = True
+        self.RUC.run(setup_only=True)
+
+    def refine(self, selection_flags=None):
+        self.RUC.num_positive_curvatures = 0
+        self.RUC.use_curvatures = False
+        self.RUC.hit_break_to_use_curvatures = False
+        self.RUC.selection_flags = selection_flags
+        
+        if args.tryscipy:
+            self.RUC.calc_curvatures = False
+            #self.RUC._setup()
+            self.RUC.calc_func = True
+            self.RUC.compute_functional_and_gradients()
+
+            from scitbx.array_family import flex
+            def func(x, RUC):
+                RUC.calc_func = True
+                RUC.x = flex.double(x)
+                f, g = RUC.compute_functional_and_gradients()
+                return f
+
+            def fprime(x, RUC):
+                RUC.calc_func = False
+                RUC.x = flex.double(x)
+                RUC.x = flex.double(x)
+                f, g = RUC.compute_functional_and_gradients()
+                return g.as_numpy_array()
+
+            from scipy.optimize import fmin_l_bfgs_b
+            out = fmin_l_bfgs_b(func=func, x0=array(self.RUC.x),
+                                fprime=fprime, args=[self.RUC], factr=args.scipyfactr)
+
+        else:
+            self.RUC.run(setup=False)
+            if self.RUC.hit_break_to_use_curvatures:
+                self.RUC.num_positive_curvatures = 0
+                self.RUC.use_curvatures = True
+                self.RUC.run(setup=False)
 
 
-            # parameter rescaling...
-            self.RUC.rescale_params = True
-            self.RUC.spot_scale_init = {img_num: EXP(self.log_of_init_crystal_scales[img_num]) \
-                                        for img_num in range(self.n_shots)}
-            self.RUC.m_init = args.Ncells_size 
-            self.RUC.ignore_line_search_failed_step_at_lower_bound = args.ignorelinelow
-            self.RUC.rotX_sigma = args.rotXYZsigma[0]
-            self.RUC.rotY_sigma = args.rotXYZsigma[1]
-            self.RUC.rotZ_sigma = args.rotXYZsigma[2]
-            self.RUC.ucell_sigmas = [args.ucellsigma, args.ucellsigma]
-            self.RUC.ucell_inits = [self.all_ucell_mans[i_shot].variables for i_shot in range(self.n_shots)]
-            self.RUC.originZ_sigma = 0.01
-            self.RUC.m_sigma = 0.05
-            self.RUC.spot_scale_sigma = .01
-            self.RUC.a_sigma = 0.05
-            self.RUC.b_sigma = 0.05
-            self.RUC.c_sigma = 0.1
-            self.RUC.fcell_sigma_scale = 0.005
-            self.RUC.fcell_resolution_bin_Id = None
-            self.RUC.compute_image_model_correlation = args.imagecorr
-            # end of parameter rescaling
-
-            # plot things
-            self.RUC.gradient_only=args.gradientonly
-            self.RUC.stpmax = args.stpmax
-            self.RUC.debug = args.debug
-            self.RUC.binner_dmax = 999
-            self.RUC.binner_dmin = 2
-            self.RUC.binner_nbin = 10
-            self.RUC.trial_id = i_trial
-            self.RUC.print_all_missets = args.printallmissets
-            self.RUC.rot_scale = args.rotscale  # TODO make this work
-            self.RUC.print_all_corr = False
-            self.RUC.Fref = self.Fhkl_ref
-            self.RUC.refine_rotZ = not args.fixrotZ
-            self.RUC.plot_images = args.plot
-            self.RUC.plot_fcell = args.plotfcell
-            self.RUC.plot_residuals = args.residual
-            self.RUC.plot_statistics = args.plotstats
-            self.RUC.setup_plots()
-
-            self.RUC.log_fcells = True
-            self.RUC.big_dump = args.bigdump
-            #FIXME in new code with per shot unit cell, this is broken..
-            self.RUC.x_init = x_init
-
-            self.RUC.idx_from_asu = self.idx_from_asu
-            self.RUC.asu_from_idx = self.asu_from_idx
-            self.RUC.scale_r1 = args.scaleR1
-            self.RUC.request_diag_once = False
-            self.RUC.S = self.SIM
-            self.RUC.restart_file = args.restartfile
-            self.RUC.has_pre_cached_roi_data = True
-            self.RUC.split_evaluation = False
-            self.RUC.trad_conv = True
-            self.RUC.fcell_bump = args.fcellbump
-            self.RUC.refine_detdist = False
-            self.RUC.S.D.update_oversample_during_refinement = False
-            self.RUC.refine_gain_fac = False
-            self.RUC.use_curvatures = False # args.curvatures
-            self.RUC.use_curvatures_threshold = args.numposcurvatures
-            self.RUC.calc_curvatures = args.curvatures
-            self.RUC.poisson_only = args.poissononly
-            self.RUC.plot_stride = args.stride
-            self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
-            self.RUC.verbose = False
-            self.RUC.use_rot_priors = False
-            self.RUC.use_ucell_priors = False
-            self.RUC.filter_bad_shots = args.filterbad
-            #TODO optional properties.. make this obvious
-            self.RUC.FNAMES = self.all_fnames
-            self.RUC.PROC_FNAMES = self.all_proc_fnames
-            self.RUC.PROC_IDX = self.all_proc_idx
-            self.RUC.Hi = self.all_Hi
-            self.RUC.output_dir = args.outdir
-
-            if args.verbose:
-                if rank == 0:  # only show refinement stats for rank 0
-                    self.RUC.verbose = True
-
-            if args.tryscipy:
-                self.RUC.calc_curvatures = False
-                self.RUC._setup()
-                self.RUC.calc_func = True
-                self.RUC.compute_functional_and_gradients()
-
-                from scitbx.array_family import flex
-                def func(x, RUC):
-                    RUC.calc_func = True
-                    RUC.x = flex.double(x)
-                    f, g = RUC.compute_functional_and_gradients()
-                    return f
-
-                def fprime(x, RUC):
-                    RUC.calc_func = False
-                    RUC.x = flex.double(x)
-                    RUC.x = flex.double(x)
-                    f, g = RUC.compute_functional_and_gradients()
-                    return g.as_numpy_array()
-
-                from scipy.optimize import fmin_l_bfgs_b
-                out = fmin_l_bfgs_b(func=func, x0=array(self.RUC.x),
-                                    fprime=fprime, args=[self.RUC], factr=args.scipyfactr)
-
-            else:
-                self.RUC.run(setup_only=args.setuponly)
-                if self.RUC.hit_break_to_use_curvatures:
-                    self.RUC.num_positive_curvatures = 0
-                    self.RUC.use_curvatures = True
-                    self.RUC.run(setup=False)
-
-                if comm.rank == 0:
-                    print ("<><><><><><><><><><><><><><><><>")
-                    print("<><><> END OF TRIAL %02d <><><><>" % (i_trial+1))
-                    print ("<><><><><><><><><><><><><><><><>")
-
-            x_init = self.RUC.x  # restart with these parameters next time
-
+    def save_lbfgs_x_array_as_dataframe(self):
         # Here we can save the refined parameters
         my_shots = self.all_shot_idx.keys()
         x = self.RUC.x
@@ -1077,8 +1101,8 @@ class FatData:
             bgplane_xpos = zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos)
             
             log_crystal_scale = x[scale_xpos]
-            proc_h5_fname = B.all_proc_fnames[i_shot]
-            proc_h5_idx = B.all_shot_idx[i_shot]
+            proc_h5_fname = self.all_proc_fnames[i_shot]
+            proc_h5_idx = self.all_shot_idx[i_shot]
 
             bgplane_a = [x[self.RUC.bg_a_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
             bgplane_b = [x[self.RUC.bg_b_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
@@ -1089,8 +1113,9 @@ class FatData:
             data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined, ncells_val, bgplane, \
                 image_corr[i_shot], fcell_xstart, ucell_xstart, rotX_xpos, rotY_xpos, rotZ_xpos, scale_xpos, \
                 ncells_xpos, bgplane_xpos))
-
-        data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
+        
+        if has_mpi:
+            data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
         if comm.rank == 0:
             import pandas
             import h5py
@@ -1167,26 +1192,68 @@ class FatData:
 ####pr = cProfile.Profile()
 ####pr.enable()
 
+##############
+# LOAD STAGE #
+##############
+
 B = FatData()
 fnames = glob(args.glob)
 B.fnames = fnames
 B.load()
-ang_res = B.init_misset_results()
+print("Finished with the load!")
 
-ang_res = comm.reduce(ang_res, MPI.SUM, root=0)
-if comm.rank == 0:
+ang_res = B.init_misset_results()
+if has_mpi:
+    ang_res = comm.reduce(ang_res, MPI.SUM, root=0)
+if rank == 0:
     miss = [a for a in ang_res if a > 0]
 
-    print "INIT MISSETS\n%s"%", ".join(map(str,ang_res))
+    print("INIT MISSETS\n%s"%", ".join(map(str,ang_res)))
     print("INITIAL MEDIAN misset = %f" % np.median(miss))
     print("INITIAL MAX misset = %f" % np.max(miss))
     print("INITIAL MIN misset = %f" % np.min(miss))
-
-comm.Barrier()
+if has_mpi:
+    comm.Barrier()
 B.tally_statistics()
 B.init_global_ucell()
-comm.Barrier()
-B.refine()
+if has_mpi:
+    comm.Barrier()
+
+trials = {"fcell": args.fcell,
+          "scale": args.scale,
+          "umatrix": args.umatrix,
+          "bmatrix": args.bmatrix,
+          "ncells": args.ncells,
+          "bg": args.bg,
+          "max_calls": args.maxcalls}
+Ntrials = len(trials["max_calls"])
+
+################
+# SETUP/REFINE #
+################
+x_init = None
+for i_trial in range(Ntrials): 
+    setup_args = {"max_calls": args.maxcalls[i_trial],
+            "refine_fcell": bool(args.fcell[i_trial]),
+            "refine_Umatrix": bool(args.umatrix[i_trial]),
+            "refine_Bmatrix": bool(args.bmatrix[i_trial]),
+            "refine_ncells": bool(args.ncells[i_trial]),
+            "refine_bg": bool(args.bg[i_trial]),
+            "refine_spot_scale": bool(args.scale[i_trial]),
+            "i_trial": i_trial, 
+            "x_init": x_init}
+    B.pre_refine_setup(**setup_args) 
+    #TODO MPI select for global_refiner.py 
+    keeperstag = args.keeperstags[i_trial] 
+    for i_shot in range(B.n_shots):
+        flags = {i_shot: B.reduced_bbox_keeper_flags[i_shot][keeperstag]}
+        B.refine(selection_flags = flags)
+        if rank == 0:
+            print ("<><><><><><><><><><><><><><><><><><><><><><><>")
+            print ("<><><> END OF TRIAL %02d ; shot %d/%d <><><><>" % (i_trial+1, i_shot+1, B.n_shots))
+            print ("<><><><><><><><><><><><><><><><><><><><><><><>")
+
+    x_init = B.RUC.x
 
 #proc_fnames_shots = [(B.all_proc_fnames[i], B.all_shot_idx[i]) for i in my_shots]
 
