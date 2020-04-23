@@ -64,6 +64,7 @@ if rank == 0:
     parser.add_argument("--globalNcells", action="store_true")
     parser.add_argument("--globalUcell", action="store_true")
     parser.add_argument("--scaleR1", action="store_true")
+    parser.add_argument("--recenter", action="store_true")
     parser.add_argument("--stpmax", default=1e20, type=float)
     parser.add_argument("--usepreoptAmat", action="store_true")
     parser.add_argument("--usepreoptscale", action="store_true")
@@ -947,6 +948,7 @@ class FatData:
 
         self.RUC.x_init = x_init
         
+        self.RUC.recenter = args.recenter
         # parameter rescaling...
         self.RUC.rescale_params = True
         
