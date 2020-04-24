@@ -7,6 +7,7 @@ parser = ArgumentParser("Make prediction boxes")
 
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
+parser.add_argument("--nocuda", action="store_true")
 parser.add_argument("--debug", action="store_true")
 parser.add_argument("--showcompleteness", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
@@ -106,7 +107,7 @@ if not os.path.exists(args.o) and rank == 0:
 MPI.COMM_WORLD.Barrier()
 
 # load the bs7 default array
-bs7_mil_ar = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", yb_scatter_name="../sf/scanned_fp_fdp.npz")
+bs7_mil_ar = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", yb_scatter_name="../sf/scanned_fp_fdp.tsv")
 datasf_mil_ar = struct_fact_special.load_4bs7_sf()
 
 #assert El_fnames
@@ -152,12 +153,12 @@ for i_shot in range(Nexper):
     else:
         img_data = np.load(_fpath)["img"]
     # get simulation parameters
-    mos_spread = h5["mos_spread"][()]
-    Ncells_abc = tuple(h5["Ncells_abc"][()])
-    mos_doms = h5["mos_doms"][()]
+    mos_spread = float(h5["mos_spread"][()])
+    Ncells_abc = tuple(map(int, h5["Ncells_abc"][()]) )
+    mos_doms = int(h5["mos_doms"][()])
     profile = h5["profile"][()]
-    beamsize = h5["beamsize_mm"][()]
-    exposure_s = h5["exposure_s"][()]
+    beamsize = float(h5["beamsize_mm"][()])
+    exposure_s = float(h5["exposure_s"][()])
     spectrum = h5["spectrum"][()]
     total_flux = np.sum(spectrum)
     xtal_size = 0.0005  #h5["xtal_size_mm"][()]
@@ -216,7 +217,7 @@ for i_shot in range(Nexper):
     simsAB = sim_utils.sim_colors(
         crystal, DET, BEAM, FF,
         energies,
-        FLUX, pids=None, profile=profile, cuda=True, oversample=1,
+        FLUX, pids=None, profile=profile, cuda=not args.nocuda, oversample=1,
         Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
         master_scale=1,recenter=True,
         exposure_s=exposure_s, beamsize_mm=beamsize, device_Id=device_Id,
@@ -238,7 +239,7 @@ for i_shot in range(Nexper):
     # group predictions bty panel name
     refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
     for panel_id in refls_predict_bypanel:
-        fast, slow = DET[panel_id].get_image_size()
+        fast, slow = DET[int(panel_id)].get_image_size()
         mask = prediction_utils.strong_spot_mask_dials(refls_predict_bypanel[panel_id], (slow, fast),
                                       as_composite=True)
         # if the panel mask is not set, set it!
@@ -263,7 +264,7 @@ for i_shot in range(Nexper):
     # group the refls by panel ID
     refls_strong_perpan = prediction_utils.refls_by_panelname(refls_strong)
     for panel_id in refls_strong_perpan:
-        fast, slow = DET[panel_id].get_image_size()
+        fast, slow = DET[int(panel_id)].get_image_size()
         mask = prediction_utils.strong_spot_mask_dials(
             refls_strong_perpan[panel_id], (slow, fast),
             as_composite=True)
@@ -392,27 +393,9 @@ for i_shot in range(Nexper):
         if len(_R_panel) > 0:
             x0, y0, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_panel))
 
-        #if list(x0) and list(x) and args.sanityplots:
-        #    m = img_data[_pid].mean()
-        #    s = img_data[_pid].std()
-        #    vmax = m + 4 * s
-        #    vmin = m - s
-
-        #    plt.figure(1)
-        #    ax = plt.gca()
-        #    ax.clear()
-        #    ax.imshow(img_data[_pid], vmax=vmax, vmin=vmin)
-        #    for i in range(len(rpp[_pid])):
-        #        ax.text(x=x[i], y=y[i] - 10, s=str(rpp[_pid]["miller_index"][i]), color='w', size=14)
-        #    ax.plot(x, y, 'w^', ms=10, mfc='none')
-        #    for i in range(len(_R_panel)):
-        #        ax.text(x=x0[i], y=y0[i], s=str(_R_panel["miller_index"][i]), color='r', size=13)
-        #    ax.plot(x0, y0, 'rs', ms=10, mfc='none')
-        #    plt.plot(xstrong, ystrong, 'go')
-
         if list(x0) and list(x):
-            tree = cKDTree(zip(x0, y0))
-            res = tree.query_ball_point(zip(x, y), r=0.9)
+            tree = cKDTree(list(zip(x0, y0)))
+            res = tree.query_ball_point(list(zip(x, y)), r=0.9)
             for i, r in enumerate(res):
                 miller_nano = rpp[_pid]["miller_index"][i]
                 if miller_nano[0] == 0 and miller_nano[1] == 0 and miller_nano[2] == 0:
@@ -429,7 +412,7 @@ for i_shot in range(Nexper):
                     nmismatch += 1
                     print ("Bad: %s, %s" % (str(miller_stills), str(miller_nano)))
 
-    bragg_hi += map(tuple, Hi)
+    bragg_hi += list(map(tuple, Hi))
     stills_hi += list(_R_shot["miller_index"])
     bragg_hi = list(set(bragg_hi))
     stills_hi = list(set(stills_hi))
@@ -489,12 +472,12 @@ for i_shot in range(Nexper):
             plt.draw()
             plt.pause(pause)
             im.set_data(int_mask)
-            plt.title("panel%d: integration mask" % i_panel)
+            plt.title("panel%d: integration mask" % panel_id)
             im.set_clim(0, 1)
             plt.draw()
             plt.pause(pause)
             im.set_data(bg_mask)
-            plt.title("panel%d: background mask" % i_panel)
+            plt.title("panel%d: background mask" % panel_id)
             im.set_clim(0, 1)
             plt.draw()
             plt.pause(pause)
@@ -523,6 +506,5 @@ for i_shot in range(Nexper):
     n_processed += 1
 
 writer.create_dataset("Amatrices", data=all_Amats, compression="lzf")
-writer.create_dataset("h5_path", data=all_paths, compression="lzf")
+writer.create_dataset("h5_path", data=np.array(all_paths, dtype="S"), compression="lzf")
 writer.close()
-

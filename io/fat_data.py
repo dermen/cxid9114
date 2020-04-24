@@ -18,7 +18,8 @@ det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
 from simtbx.diffBragg.refiners.global_refiner import FatRefiner
-from cxid9114.utils import map_hkl_list, open_flex
+from cxid9114.utils import open_flex
+from simtbx.diffBragg.utils import map_hkl_list
 import sys
 from IPython import embed
 
@@ -28,8 +29,6 @@ if rank == 0:
     import time
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
-    parser.add_argument("--character", type=str, choices=['rock', 'syl', 'syl2', 'syl3', 'kaladin'], default=None,
-        help="different refinements")
     parser.add_argument("--readoutless", action="store_true")
     parser.add_argument("--imagecorr", action="store_true")
     parser.add_argument("--plot", action='store_true')
@@ -43,8 +42,8 @@ if rank == 0:
     parser.add_argument("--mosspread", default=0, type=float)
     parser.add_argument("--preopttag", default="preopt", type=str)
     parser.add_argument("--gainval", default=28, type=float)
-    parser.add_argument("--curseoftheblackpearl", action="store_true")
-    parser.add_argument("--ignorelinelow", action="store_true")
+    parser.add_argument("--curseoftheblackpearl", action="store_true", help="This argument does nothing... ")
+    parser.add_argument("--ignorelinelow", action="store_true", help="ignore line search in LBFGS")
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
@@ -56,7 +55,7 @@ if rank == 0:
     parser.add_argument("--residual", action='store_true')
     parser.add_argument("--setuponly", action='store_true')
     parser.add_argument('--filterbad', action='store_true')
-    parser.add_argument("--tryscipy", action="store_true")
+    parser.add_argument("--tryscipy", action="store_true", help="use scipy's LBFGS implementation instead of cctbx's")
     parser.add_argument("--restartfile", type=str, default=None)
     parser.add_argument("--Fobslabel", type=str, default=None)
     parser.add_argument("--Freflabel", type=str, default=None)
@@ -152,24 +151,19 @@ if rank == 0:
 
     # let the root load the structure factors and energies to later broadcast
     from cxid9114.sf import struct_fact_special
-    sf_path = os.path.dirname(struct_fact_special.__file__)
-    sfall_file = os.path.join(sf_path, "realspec_sfall.h5")
-    data_sf, data_energies = struct_fact_special.load_sfall(sfall_file)
     from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW
     import numpy as np
     np_log = np.log
+    ARANGE = np.arange
+    LOGICAL_OR = np.logical_or
     # grab the structure factors at the edge energy (ENERGY_LOW=8944 eV)
-    edge_idx = np.abs(data_energies -ENERGY_LOW).argmin()
-    Fhkl_guess = data_sf[edge_idx]
-    wavelens = ENERGY_CONV / data_energies
 
     from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
 
 else:
     np_indices = None
-    EXP = None
+    EXP = ARANGE = LOGICAL_OR= None
     np_log = None
-    sf_path = None
     diff_rot = None
     flex_double = None
     compare_with_ground_truth = None
@@ -191,7 +185,6 @@ else:
     TetragonalManager = None
     Crystal = None
     sqr = None
-    Fhkl_guess = wavelens = None
 
 
 if has_mpi:
@@ -199,6 +192,8 @@ if has_mpi:
         print("Broadcasting imports")
     #FatRefiner = comm.bcast(FatRefiner, root=0)
     EXP = comm.bcast(EXP)
+    LOGICAL_OR = comm.bcast(LOGICAL_OR)
+    ARANGE = comm.bcast(ARANGE)
     RefineAllMultiPanel = comm.bcast(RefineAllMultiPanel)
     np_indices = comm.bcast(np_indices, root=0)
     np_log = comm.bcast(np_log, root=0)
@@ -207,9 +202,6 @@ if has_mpi:
     diff_rot = comm.bcast(diff_rot, root=0)
     compare_with_ground_truth = comm.bcast(compare_with_ground_truth, root=0)
     args = comm.bcast(args, root=0)
-    sf_path = comm.bcast(sf_path, root=0)
-    Fhkl_guess = comm.bcast(Fhkl_guess, root=0)
-    wavelens = comm.bcast(wavelens, root=0)
     Crystal = comm.bcast(Crystal, root=0)
     sqr = comm.bcast(sqr, root=0)
     CSPAD = comm.bcast(CSPAD, root=0)
@@ -310,18 +302,14 @@ class FatData:
         else:
             self.SIM.D.spot_scale = 12
 
-        if args.character is not None:
-            if args.character in ["rock", "syl", "syl2", "syl3", "kaladin"]:
-                if args.unknownscale is not None:
-                    #self.SIM.D.spot_scale = 1e6
-                    
-                    self.SIM.D.spot_scale = args.unknownscale
-                    #self.SIM.D.spot_scale = 15555.1313 kaladin_2k after a small batch starting from some high number 
-
-                    #self.SIM.D.spot_scale = 17884  # determined from refinement using the syl3 starting model
-                else:
-                    self.SIM.D.spot_scale = 1150
-                    self.SIM.D.polarization = .999
+        if args.unknownscale is not None:
+            #self.SIM.D.spot_scale = 1e6
+            self.SIM.D.spot_scale = args.unknownscale
+            #self.SIM.D.spot_scale = 15555.1313 kaladin_2k after a small batch starting from some high number
+            #self.SIM.D.spot_scale = 17884  # determined from refinement using the syl3 starting model
+        else:
+            self.SIM.D.spot_scale = 1150
+            self.SIM.D.polarization = .999
 
     def _process_miller_data(self):
         idx, data = self.SIM.D.Fhkl_tuple
@@ -453,14 +441,15 @@ class FatData:
 
             # load the dxtbx image data directly:
             npz_path = h["h5_path"][shot_idx]
+            try:
+                npz_path = npz_path.decode()
+            except AttributeError:
+                pass
 
             if args.imgdirname is not None:
                 import os
                 npz_path = npz_path.split("/kaladin/")[1]
                 npz_path = os.path.join(args.imgdirname, npz_path)
-
-            if args.character is not None:  # TODO what am I ?
-                npz_path = npz_path.replace("rock", args.character)
 
             if args.noiseless:
                 noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
@@ -525,12 +514,12 @@ class FatData:
             # Here we provide a means for loading shoeboxes if and only if they
             # will ever be simulated as determined by the keeper flags
             # If a bound box is not flagged anywhere, it will be removed from memory
-            bbox_id = np.arange(n_bboxes_total)
-            is_a_keeper = np.zeros(n_bboxes_total).astype(bool)
+            bbox_id = ARANGE(n_bboxes_total)
+            is_a_keeper = np_zeros(n_bboxes_total).astype(bool)
             kept_bbox_ids = {}
             for keeperstag in set(args.keeperstags):
                 keeper_flags = h["bboxes"]["%s%d" % (keeperstag, shot_idx)][()]
-                is_a_keeper = np.logical_or(is_a_keeper, keeper_flags)
+                is_a_keeper = LOGICAL_OR(is_a_keeper, keeper_flags)
                 kept_bbox_ids[keeperstag] = bbox_id[keeper_flags]
             
             # The following provides a means for selecting the different subsets
@@ -538,7 +527,7 @@ class FatData:
             all_kept_bbox_ids = bbox_id[is_a_keeper]
             self.reduced_bbox_keeper_flags[img_num] = {}
             for keeperstag in set(args.keeperstags):
-                flags = np.array([i in kept_bbox_ids[keeperstag] for i in all_kept_bbox_ids])
+                flags = array([i in kept_bbox_ids[keeperstag] for i in all_kept_bbox_ids])
                 self.reduced_bbox_keeper_flags[img_num][keeperstag] = flags
             # END selection flag management
 
@@ -561,10 +550,6 @@ class FatData:
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             #h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
             h5_fname = npz_path.replace(".npz", "")
-            if args.character is not None:
-                h5_fname = h5_fname.replace("rock", args.character)
-            if args.testmode2:
-                h5_fname = npz_path.split(".npz")[0]
             data = h5py_File(h5_fname, "r")
 
             xtal_scale_truth = data["spot_scale"][()]
@@ -596,12 +581,11 @@ class FatData:
 
             #comm.Barrier()
 
-            #exit()
             fluxes *= es  # multiply by the exposure time
             # TODO: wavelens should come from the imageset file itself
             if "wavelengths" in data.keys():
                 wavelens = data["wavelengths"][()]
-            elif args.bs7 or args.bs7real:
+            else:# elif args.bs7 or args.bs7real:
                 from cxid9114.parameters import WAVELEN_HIGH
                 wavelens = [WAVELEN_HIGH]
 
@@ -646,9 +630,6 @@ class FatData:
                         #from cxid9114.sf import struct_fact_special
                         #import os
                         wavelen = WAVELEN_HIGH
-                        #Fhkl_guess = struct_fact_special.sfgen(WAVELEN_HIGH,
-                        #    os.path.join(sf_path, "../sim/4bs7.pdb"),
-                        #    yb_scatter_name=os.path.join(sf_path, "../sf/scanned_fp_fdp.npz"))
                     else:
                         from cxid9114.parameters import WAVELEN_LOW
                         wavelen = WAVELEN_LOW
@@ -1070,7 +1051,7 @@ class FatData:
                 self.RUC.run(setup=False)
 
 
-    def save_lbfgs_x_array_as_dataframe(self):
+    def save_lbfgs_x_array_as_dataframe(self, outname):
         # Here we can save the refined parameters
         my_shots = self.all_shot_idx.keys()
         x = self.RUC.x
@@ -1091,52 +1072,54 @@ class FatData:
 
             fcell_xstart = self.RUC.fcell_xstart
             ucell_xstart = self.RUC.ucell_xstart[i_shot]
-            rotX_xpos = self.RUC.rotX_xpos[i_shot]
-            rotY_xpos = self.RUC.rotY_xpos[i_shot]
-            rotZ_xpos = self.RUC.rotZ_xpos[i_shot]
+            rotX = self.RUC._get_rotX(i_shot)
+            rotY = self.RUC._get_rotY(i_shot)
+            rotZ = self.RUC._get_rotZ(i_shot)
             scale_xpos = self.RUC.spot_scale_xpos[i_shot]
             ncells_xpos = self.RUC.ncells_xpos[i_shot]
             nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
             bgplane_a_xpos = [self.RUC.bg_a_xstart[i_shot][i_spot] for i_spot in range(nspots)]
             bgplane_b_xpos = [self.RUC.bg_b_xstart[i_shot][i_spot] for i_spot in range(nspots)]
             bgplane_c_xpos = [self.RUC.bg_c_xstart[i_shot][i_spot] for i_spot in range(nspots)]
-            bgplane_xpos = zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos)
-            
-            log_crystal_scale = x[scale_xpos]
+            bgplane_xpos = list(zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos))
+
+            crystal_scale = self.RUC._get_spot_scale(i_shot)
             proc_h5_fname = self.all_proc_fnames[i_shot]
             proc_h5_idx = self.all_shot_idx[i_shot]
 
-            bgplane_a = [x[self.RUC.bg_a_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
-            bgplane_b = [x[self.RUC.bg_b_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
-            bgplane_c = [x[self.RUC.bg_c_xstart[i_shot][i_spot]] for i_spot in range(nspots)]
-            bgplane = zip(bgplane_a, bgplane_b, bgplane_c)
+            bgplane = [self.RUC._get_bg_vals(i_shot, i_spot) for i_spot in range(nspots)]     # zip(bgplane_a, bgplane_b, bgplane_c)
+            ncells_val = self.RUC._get_m_val(i_shot)
+            init_misori = self.RUC.get_init_misorientation(i_shot)
+            final_misori = self.RUC.get_current_misorientation(i_shot)
 
-            ncells_val = x[ncells_xpos]
-            data_to_send.append((proc_h5_fname, proc_h5_idx, log_crystal_scale, Amat_refined, ncells_val, bgplane, \
-                image_corr[i_shot], fcell_xstart, ucell_xstart, rotX_xpos, rotY_xpos, rotZ_xpos, scale_xpos, \
-                ncells_xpos, bgplane_xpos))
+            img_corr= self.RUC._get_image_correlation(i_shot)
+            init_img_corr = self.RUC._get_init_image_correlation(i_shot)
+            data_to_send.append((proc_h5_fname, proc_h5_idx, crystal_scale, Amat_refined, ncells_val, bgplane, \
+                img_corr, init_img_corr, fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, \
+                ncells_xpos, bgplane_xpos, init_misori, final_misori))
         
         if has_mpi:
             data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
         if comm.rank == 0:
             import pandas
             import h5py
-            fnames, shot_idx, log_scales, Amats, ncells_vals, bgplanes, image_corr, \
-                fcell_xstart, ucell_xstart, rotX_xpos, rotY_xpos, rotZ_xpos, scale_xpos, ncells_xpos, bgplane_xpos \
-                = zip(*data_to_send)
-
+            fnames, shot_idx, xtal_scales, Amats, ncells_vals, bgplanes, image_corr, init_img_corr, \
+                fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xpos, bgplane_xpos, \
+                init_misori, final_misori = zip(*data_to_send)
 
             df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx,
-                                   "log_scales": log_scales, "Amats": Amats, "ncells": ncells_vals,
+                                   "spot_scales": xtal_scales, "Amats": Amats, "ncells": ncells_vals,
                                    "bgplanes": bgplanes, "image_corr": image_corr,
-                                   "fcell_xstart":fcell_xstart,
+                                   "init_image_corr": init_img_corr,
+                                   "fcell_xstart": fcell_xstart,
                                    "ucell_xstart": ucell_xstart,
-                                   "rotX_xpos":rotX_xpos,
-                                   "rotY_xpos":rotY_xpos,
-                                   "rotZ_xpos":rotZ_xpos,
-                                   "scale_xpos":scale_xpos,
-                                   "ncells_xpos":ncells_xpos,
-                                   "bgplanes_xpos":bgplane_xpos})
+                                   "init_misorient": init_misori, "final_misorient": final_misori,
+                                   "rotX": rotX,
+                                   "rotY": rotY,
+                                   "rotZ": rotZ,
+                                   "scale_xpos": scale_xpos,
+                                   "ncells_xpos": ncells_xpos,
+                                   "bgplanes_xpos": bgplane_xpos})
             u_fnames = df.proc_fnames.unique()
 
             u_h5s = {f:h5py.File(f,'r')["h5_path"][()] for f in u_fnames}
@@ -1145,11 +1128,14 @@ class FatData:
                 img_fnames.append( u_h5s[f][idx] )
             df["imgpaths"] = img_fnames
 
-            opt_outname = "optimized_params.pkl"
-            if args.optoutname is not None:
-                opt_outname = args.optoutname
-            df.to_pickle(opt_outname)
+            #opt_outname = "optimized_params.pkl"
+            #if args.optoutname is not None:
+            #    opt_outname = args.optoutname
 
+            #opt_outname = os.path.splitext(os.path.basename(opt_outname))[0] + "trial%d.pkl" % self.RUC.trial_id)
+            #if args.outdir is not None:
+            #    opt_outname = os.path.join(args.outdir,
+            df.to_pickle(outname)
 
     def init_misset_results(self):
         results = []
@@ -1180,15 +1166,15 @@ class FatData:
         possible_labels = []
         foundlabel = False
         for ma in miller_arrays:
-            label = ma.info().label_string
+            label = ma.info().label_string()
             possible_labels.append(label)
             if label == mtzlabel:
                 foundlabel = True
                 break
 
-        assert foundlabel, "MTZ Label not found... \npossible choices: %s" % " ".join(possible_labels)
-
-        return ma.as_amplitude_array()
+        assert foundlabel, "MTZ Label not found... \npossible choices: %s" % (" ".join(possible_labels))
+        ma = ma.as_amplitude_array()
+        return ma
 
 
 ####pr = cProfile.Profile()
@@ -1256,6 +1242,8 @@ for i_trial in range(Ntrials):
             print ("<><><><><><><><><><><><><><><><><><><><><><><>")
 
     x_init = B.RUC.x
+
+    B.save_lbfgs_x_array_as_dataframe("trial%d.pkl" % (i_trial+1))
 
 #proc_fnames_shots = [(B.all_proc_fnames[i], B.all_shot_idx[i]) for i in my_shots]
 

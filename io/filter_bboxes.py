@@ -1,4 +1,5 @@
 #!/usr/bin/env libtbx.python
+from __future__ import print_function
 
 try:
     from mpi4py import MPI
@@ -143,6 +144,10 @@ def main():
 
         # load the dxtbx image data directly:
         img_path = h["h5_path"][shot_idx]
+        try:
+            img_path = img_path.decode()
+        except AttributeError:
+            pass
         img_data = numpy_load(img_path)["img"]
         bboxes = h["bboxes"]["shot%d" % shot_idx][()]
         panel_ids = h["panel_ids"]["shot%d" % shot_idx][()]
@@ -240,7 +245,7 @@ def main():
         tot_pix = [(j2 - j1) * (i2 - i1) for i_bb, (i1, i2, j1, j2) in enumerate(kept_bboxes)]
         Ntot += sum(tot_pix)
         if rank == 0:
-            print "%g total pixels (file %d / %d)" % (Ntot, img_num + 1, len(my_shots))
+            print ("%g total pixels (file %d / %d)" % (Ntot, img_num + 1, len(my_shots)))
         all_kept_bbox += map(list, kept_bboxes)
         all_is_kept_flags += [(fname_idx, shot_idx, is_a_keeper)]  # store this information, write to disk
 
@@ -249,18 +254,16 @@ def main():
         h.close()
 
     print("END OF LOOP")
-    print "Rank %d; total bboxes=%d; Total pixels=%g" % (rank, len(all_kept_bbox), Ntot)
+    print ("Rank %d; total bboxes=%d; Total pixels=%g" % (rank, len(all_kept_bbox), Ntot))
     all_kept_bbox = MPI.COMM_WORLD.gather(all_kept_bbox, root=0)
     all_is_kept_flags = MPI.COMM_WORLD.gather(all_is_kept_flags, root=0)
 
     if rank == 0:
         all_kept_bbox = [bbox for bbox_lst in all_kept_bbox for bbox in bbox_lst]
         Ntot_pix = sum([(j2 - j1) * (i2 - i1) for i1, i2, j1, j2 in all_kept_bbox])
-        print
-        print("<><><><><><><<><><><><><><><><><><><><><><>")
+        print("\n<><><><><><><<><><><><><><><><><><><><><><>")
         print("I am root. total bboxes=%d, Total pixels=%g" % (len(all_kept_bbox), Ntot_pix))
-        print("<><><><><><><<><><><><><><><><><><><><><><>")
-        print
+        print("<><><><><><><<><><><><><><><><><><><><><><>\n")
 
         print("I am root. I will store flags for each bbox on each shot")
 

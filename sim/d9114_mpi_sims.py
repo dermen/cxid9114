@@ -64,6 +64,7 @@ parser.add_argument("--Ncells", type=float, default=15)
 parser.add_argument("--xtal_size_mm", type=float, default=None)
 parser.add_argument("--mos_spread_deg", type=float, default="0.01")
 parser.add_argument("--mos_doms", type=int, default=100)
+parser.add_argument("--cbf",action="store_true", help="simulate single panel image on a CBF")
 parser.add_argument("--xtal_size_jitter", type=float, default=None)
 
 args = parser.parse_args()
@@ -128,7 +129,7 @@ else:
 
         seeds = comm.bcast(seeds, root=0)
         np.random.seed(seeds[comm.rank])
-        print "Rank %d, seed %d" % (comm.rank, seeds[comm.rank])
+        print ("Rank %d, seed %d" % (comm.rank, seeds[comm.rank]))
     else:
         np.random.seed(args.seed)
 
@@ -441,19 +442,18 @@ for i_data in shot_range:
             SIM.free_all()
             del SIM
 
-    # all_rots =[]
-    # from scitbx.matrix import sqr
-    # for i_U, U in enumerate(Umats):
-    #    Utruth = crystal.get_U()
-    #    crystal2 = CrystalFactory.from_dict(cryst_descr)
-    #    crystal2.set_U( sqr(U)*sqr(Utruth) )
-    #    out = difference_rotation_matrix_axis_angle(crystal, crystal2)
-    #    all_rots.append(out[2])
-    # assert( np.mean(all_rots) < 1e-7)
 
     if args.write_img:
 
-        print "Rank %d: SAVING DATAFILE" % rank
+        if args.cbf:
+            assert not args.cspad
+            SIM = nanoBragg(detector=DET, beam=BEAM)
+            SIM.raw_pixels = flex.double(simsDataSum[0].astype(np.float64))
+            cbfname = "%s_rank%d_data%d_fluence%d.cbf" % (ofile, rank, i_data, flux_id)
+            cbfname = os.path.join(odirj, cbfname)
+            SIM.to_cbf(cbfname)
+
+        print( "Rank %d: SAVING DAFILE" % rank)
         if args.cspad:
             data_array = simsDataSum.astype(np.float64)
         else:
