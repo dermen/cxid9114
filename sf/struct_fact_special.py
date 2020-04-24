@@ -120,7 +120,7 @@ def main():
 
     output_name = os.path.join(sf_path, "realspec_sfall.h5")  # output file name
     pdb_name = os.path.join(sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
-    yb_scatter_name = os.path.join(sf_path, "scanned_fp_fdp.npz")  # high res fdp scan and corresponding calculated fp
+    yb_scatter_name = os.path.join(sf_path, "scanned_fp_fdp.tsv")  # high res fdp scan and corresponding calculated fp
 
     Fout = []
     indices_prev = None  # for sanity check on miller arrays
