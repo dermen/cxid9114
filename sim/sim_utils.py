@@ -1,9 +1,14 @@
 
+from __future__ import print_function
 import inspect
 import numpy as np
 import time
 import six
 import sys
+try:
+    from collections.abc import Iterable
+except ImportError:
+    from collections import Iterable
 
 import cctbx
 import scitbx
@@ -319,8 +324,16 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None,
                one_sf_array=False, printout_pix=None, time_panels=False, recenter=True):
 
+
+    if not isinstance(energies, Iterable):
+        raise ValueError("Energies needs to be an iterable")    
+    if not isinstance(fluxes, Iterable):
+        raise ValueError("Fluxes needs to be an iterable")    
+
     Npan = len(detector)
     Nchan = len(energies)
+    if Nchan != len(fluxes):
+        raise ValueError ("energies and fluxes need to be the same length")
 
     if only_water:
         add_spots = False
@@ -420,13 +433,11 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
             PattF.SIM2.free_all()
         if time_panels:
             tsim = time.time() - tstart
-            #if six.PY3:
-            #    print("Panel%d took %f sec" % (i_pan, tsim), flush=True)
-            #else:
-            #    print("Panel%d took %f sec" % (i_pan, tsim))
-            #    sys.stdout.flush()
-            print("Panel%d took %f sec" % (i_pan, tsim))
-
+            if six.PY3:
+                print("\rPanel %d (%d/%d) took %f sec" % (i_pan,ii+1, len(pids), tsim), end="", flush=True) 
+            else:
+                print("\rPanel %d (%d/%d) took %f sec" % (i_pan,ii+1, len(pids), tsim), end="") 
+                sys.stdout.flush()
     if gimmie_Patt:
         return panel_imgs, PattF
     else:
