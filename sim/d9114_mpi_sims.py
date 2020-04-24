@@ -16,6 +16,8 @@ import argparse
 
 parser = argparse.ArgumentParser("make dadat")
 parser.add_argument("--savenoiseless", action="store_true")
+parser.add_argument("--savenpz", action="store_true", help="write image as a npz file (major python version dependent)")
+parser.add_argument("--saveh5", action="store_true", help="write image as an hdf5 file")
 parser.add_argument("--optimizeoversample", action="store_true")
 parser.add_argument("--start", default=None, type=int)
 parser.add_argument("--stop", default=None, type=int)
@@ -25,6 +27,7 @@ parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default=
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
 parser.add_argument("--sad", action="store_true")
 parser.add_argument("--renormflux", action="store_true")
+parser.add_argument('--spectrafile', type=str, default=None, help="path to a spectrum file created with spec/make_spec.py")
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
 parser.add_argument("--rank-seed", dest='use_rank_as_seed', action='store_true',
                     help="seed the random number generator with worker Id")
@@ -35,6 +38,7 @@ parser.add_argument("--add-noise", dest="add_noise", action='store_true', help="
 parser.add_argument("--masterscalejitter", type=float, default=0, help="sigma of the master scale")
 parser.add_argument("--Ncellsjitter", type=float, default=0, help="sigma of the Ncells")
 parser.add_argument("--ucelljitter", type=float, default=0, help="sigma of the trtragonal unit cell constants a and c")
+parser.add_argument("--timesimulations", action="store_true")
 parser.add_argument("--profile", dest="profile", type=str, default=None,
                     choices=["gauss", "round", "square", "tophat"], help="shape of spots determined with this")
 parser.add_argument("--cspad", action="store_true")
@@ -54,6 +58,7 @@ parser.add_argument("--p9", action="store_true")
 parser.add_argument("--bs7", action="store_true")
 parser.add_argument("--bs7real", action="store_true")
 parser.add_argument("--kernelspergpu", default=1, type=int, help="how many processes  accessing each gpu")
+parser.add_argument("--forcemono", action="store_true", help="do a monochromatic simulations")
 parser.add_argument("--oversample", type=int, default=0)
 parser.add_argument("--Ncells", type=float, default=15)
 parser.add_argument("--xtal_size_mm", type=float, default=None)
@@ -128,7 +133,15 @@ else:
         np.random.seed(args.seed)
 
 sim_path = os.path.dirname(sim_utils.__file__)
-spectra_filename = os.path.join(sim_path, "../spec/bs7_100kspec.h5")
+
+spectra_filename = args.spectrafile
+if spectra_filename is None:
+    try:
+        spectra_filename = os.path.join(sim_path, "../spec/bs7_100kspec.h5")
+    except IOError:
+        print("Default spectra File does not exists: %s. Aborting. See spec/make_specs.py" % spectra_filename)
+        sys.exit()
+
 spec_h5 = h5py.File(spectra_filename, "r")
 data_fluxes_all = spec_h5["fluxes"][()].astype(float)
 data_wavelengths_all = spec_h5["wavelengths"][()].astype(float)
@@ -144,7 +157,7 @@ if args.sad:
         #data_sf = utils.open_flex("../sf/bs7_real_scaled.pkl")
         data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
             "./4bs7.pdb", 
-            yb_scatter_name="../sf/scanned_fp_fdp.npz")
+            yb_scatter_name="../sf/scanned_fp_fdp.tsv")
         data_sf = data_sf.as_amplitude_array()
     else:
         data_sf = struct_fact_special.load_4bs7_sf()
@@ -188,6 +201,10 @@ if args.start is not None:
 if args.stop is not None:
     stop = args.stop
 shot_range = range(start, stop)
+
+    #if not args.overwrite:
+    #    raise NotImplementedError("If writing master hdf5, must work in overwrite mode")
+
 for i_data in shot_range:
     flux_id = data_fluxes_idx[i_data]
     h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, rank, i_data, flux_id)
@@ -224,8 +241,13 @@ for i_data in shot_range:
             data_energies = ENERGY_CONV/data_wavelengths_all[flux_id]
             BEAM.set_wavelength(float(data_wave_ebeams_all[flux_id]))
             data_sf = data_sf + [None]*(len(data_energies)-1)
+            if args.forcemono:
+                data_energies = [ENERGY_CONV / BEAM.get_wavelength()]
+                data_fluxes = [data_fluxes.sum()]
+                data_sf = [data_sf[0]]
         else:
             data_fluxes = np.array([ave_flux_across_exp])
+    
 
     a = np.random.normal(a, args.ucelljitter)
     c = np.random.normal(c, args.ucelljitter)
@@ -279,9 +301,7 @@ for i_data in shot_range:
     masterscale = args.masterscale
     if masterscale is not None:
         masterscale = np.random.normal(masterscale, args.masterscalejitter)
-    assert masterscale > 0
-    #if masterscale < 0.1:  # FIXME: make me more smart
-    #     masterscale = 0.1
+        assert masterscale > 0
     sim_kwargs = {'pids': None,
                   'profile': args.profile,
                   'cuda': cuda,
@@ -300,6 +320,7 @@ for i_data in shot_range:
                   'adc_offset': adc_offset,
                   'show_params': args.show_params,
                   'crystal_size_mm': xtal_size_mm,
+                  'time_panels': args.timesimulations, 
                   'one_sf_array': True}  #data_sf[0] is not None and data_sf[1] is None}
 
     print ("Rank %d: SIULATING DATA IMAGE" % rank)
@@ -388,7 +409,7 @@ for i_data in shot_range:
     if add_background:
         # background was made using average flux over all shots, so scale it up/down here
         # TODO consider varying the background level to simultate jet thickness jitter
-        bg_scale = data_fluxes.sum() / ave_flux_across_exp
+        bg_scale = sum(data_fluxes) / ave_flux_across_exp
         print("Rank %d: ADDING BG with scale of %f" % (rank,bg_scale))
         if args.cspad:
             simsDataSum += background * bg_scale
@@ -399,7 +420,7 @@ for i_data in shot_range:
         print("Rank %d: ADDING NOISE" % rank)
         if args.savenoiseless:
             np.savez(h5name + ".noiseless.npz",
-                     img=simsDataSum.astype(np.float32),
+                     img=simsDataSum.astype(np.float64),
                      det=DET.to_dict(), beam=BEAM.to_dict())
         for pidx in range(len(DET)):
             SIM = nanoBragg(detector=DET, beam=BEAM, panel_id=pidx)
@@ -434,32 +455,49 @@ for i_data in shot_range:
 
         print "Rank %d: SAVING DATAFILE" % rank
         if args.cspad:
-            np.savez(h5name + ".npz",
-                     img=simsDataSum.astype(np.float32),
-                     det=DET.to_dict(), beam=BEAM.to_dict())
-
+            data_array = simsDataSum.astype(np.float64)
         else:
+            data_array = simsDataSum[0].astype(np.float64)
+        if args.savenpz:
             np.savez(h5name + ".npz",
-                     img=simsDataSum[0].astype(np.float32),
+                     img=data_array,
                      det=DET.to_dict(), beam=BEAM.to_dict())
+        if args.saveh5:
+            from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter
+            #img_h5name = "%s_rank%d_data%d_fluence%d.img.h5" % (ofile, rank, i_data, flux_id)
+            #img_h5name = os.path.join(odirj, img_h5name)
+            with H5AttributeGeomWriter(filename=h5name, image_shape=data_array.shape, num_images=1, 
+                            detector=DET, beam=BEAM, dtype=np.float64) as WRITER:
+                WRITER.add_image(data_array)
 
-        fout = h5py.File(h5name, "w")
-        # fout.create_dataset("bigsim_d9114", data=simsDataSum[0].astype(np.float32), compression='lzf')
-        fout.create_dataset("crystalA", data=crystal.get_A())
-        fout.create_dataset("crystalU", data=crystal.get_U())
-        fout.create_dataset("spectrum", data=data_fluxes)
-        fout.create_dataset("wavelengths", data=ENERGY_CONV/data_energies)
-        fout.create_dataset("mos_doms", data=mos_doms)
-        fout.create_dataset("mos_spread", data=mos_spread)
-        fout.create_dataset("Ncells_abc", data=Ncells_abc)
-        fout.create_dataset("divergence_tuple", data=div_tup)
-        fout.create_dataset("beamsize_mm", data=beamsize_mm)
-        fout.create_dataset("exposure_s", data=exposure_s)
-        fout.create_dataset("profile", data=profile)
-        fout.create_dataset("xtal_size_mm", data=xtal_size_mm)
-        fout.create_dataset("spot_scale", data=spot_scale)
-        fout.create_dataset("gain", data=GAIN)
-        fout.create_dataset("randnums", data=randnums)
-        fout.close()
+        # save the shots simulation parameter data
+        open_flag = "w"
+        if os.path.exists(h5name):
+            open_flag= "r+"
+        with  h5py.File(h5name, open_flag) as fout:
+            # fout.create_dataset("bigsim_d9114", data=simsDataSum[0].astype(np.float32), compression='lzf')
+            keylist = ["crystalA", "crystalU", "spectrum", "wavelengths", "mos_doms", "mos_spread",
+                "Ncells_abc", "divergence_tuple", "beamsize_mm", "exposure_s", "profile", "xtal_size_mm",
+                "gain", "spot_scale","randnums"]
+            h5keys = list(fout.keys())
+            for k in keylist:
+                if k in h5keys:
+                    del fout[k]
+            fout.create_dataset("crystalA", data=crystal.get_A())
+            fout.create_dataset("crystalU", data=crystal.get_U())
+            fout.create_dataset("spectrum", data=data_fluxes)
+            fout.create_dataset("wavelengths", data=[ENERGY_CONV/w for w in data_energies])
+            fout.create_dataset("mos_doms", data=mos_doms)
+            fout.create_dataset("mos_spread", data=mos_spread)
+            fout.create_dataset("Ncells_abc", data=Ncells_abc)
+            fout.create_dataset("divergence_tuple", data=div_tup)
+            fout.create_dataset("beamsize_mm", data=beamsize_mm)
+            fout.create_dataset("exposure_s", data=exposure_s)
+            fout.create_dataset("profile", data=profile)
+            fout.create_dataset("xtal_size_mm", data=xtal_size_mm)
+            fout.create_dataset("spot_scale", data=spot_scale)
+            fout.create_dataset("gain", data=GAIN)
+            fout.create_dataset("randnums", data=randnums)
 
     print("Rank %d: DonDonee" % rank)
+
