@@ -48,7 +48,7 @@ if rank == 0:
     parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
     parser.add_argument("--noiseless", action="store_true")
-    parser.add_argument("--optoutname", type=str, default=None)
+    parser.add_argument("--optoutname", type=str, default="results")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--boop", action="store_true")
     parser.add_argument("--bigdump", action="store_true")
@@ -80,7 +80,6 @@ if rank == 0:
     parser.add_argument("--Nmax", type=int, default=-1, help='NOT USING. Max number of images to process per rank')
     parser.add_argument("--nload", type=int, default=None, help='Max number of images to load per rank')
     parser.add_argument("--loadstart", type=int, default=None)
-    parser.add_argument("--loadstop", type=int, default=None)
     parser.add_argument("--ngroups", type=int, default=1)
     parser.add_argument("--groupId", type=int, default=0)
     parser.add_argument('--perturblist', default=None, type=int)
@@ -962,12 +961,14 @@ class FatData:
         self.RUC.stpmax = args.stpmax
         self.RUC.debug = args.debug
         self.RUC.binner_dmax = 999
-        self.RUC.binner_dmin = 2
+        self.RUC.binner_dmin = 3.1 #2
         self.RUC.binner_nbin = 10
         self.RUC.trial_id = self.i_trial
         self.RUC.print_all_missets = args.printallmissets
         self.RUC.print_all_corr = False
         self.RUC.Fref = self.Fhkl_ref
+        self.RUC.merge_stat_frequency=3
+        self.RUC.print_resolution_bins=True
         self.RUC.refine_rotZ = not args.fixrotZ
         self.RUC.plot_images = args.plot
         self.RUC.plot_fcell = args.plotfcell
@@ -980,7 +981,7 @@ class FatData:
 
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
-        self.RUC.scale_r1 = args.scaleR1
+        self.RUC.scale_r1 = True
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
         self.RUC.restart_file = args.restartfile
@@ -1220,7 +1221,12 @@ Ntrials = len(trials["max_calls"])
 # SETUP/REFINE #
 ################
 x_init = None
+if rank==0:
+    import time
+
 for i_trial in range(Ntrials): 
+    if rank==0:
+        tstart = time.time()
     setup_args = {"max_calls": args.maxcalls[i_trial],
             "refine_fcell": bool(args.fcell[i_trial]),
             "refine_Umatrix": bool(args.umatrix[i_trial]),
@@ -1240,10 +1246,15 @@ for i_trial in range(Ntrials):
             print ("<><><><><><><><><><><><><><><><><><><><><><><>")
             print ("<><><> END OF TRIAL %02d ; shot %d/%d <><><><>" % (i_trial+1, i_shot+1, B.n_shots))
             print ("<><><><><><><><><><><><><><><><><><><><><><><>")
-
+    if has_mpi:
+        comm.Barrier()
     x_init = B.RUC.x
 
-    B.save_lbfgs_x_array_as_dataframe("trial%d.pkl" % (i_trial+1))
+    if rank==0:
+        tdone = time.time()-tstart
+        print("TRIAL %d TIMEINGZ = %f secz" % (i_trial+1, tdone))
+    outname = "%s_trial%d.pkl" % (args.optoutname, i_trial+1)
+    B.save_lbfgs_x_array_as_dataframe(outname)
 
 #proc_fnames_shots = [(B.all_proc_fnames[i], B.all_shot_idx[i]) for i in my_shots]
 

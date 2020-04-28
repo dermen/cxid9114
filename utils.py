@@ -495,3 +495,13 @@ def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
     else:
         return shot
 
+
+def aligned_lyso_crystal():
+    from dxtbx.model import Crystal
+    cryst_descr = {'__id__': 'crystal',
+                  'real_space_a': (79, 0, 0),
+                  'real_space_b': (0, 79, 0),
+                  'real_space_c': (0, 0, 38),
+                  'space_group_hall_symbol': '-P 4 2'}
+    C = Crystal.from_dict(cryst_descr)
+    return C
