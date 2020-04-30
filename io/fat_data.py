@@ -17,7 +17,7 @@ from dxtbx.model.detector import DetectorFactory
 det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
-from simtbx.diffBragg.refiners.global_refiner import FatRefiner
+from simtbx.diffBragg.refiners.global_refiner import GlobalRefiner
 from cxid9114.utils import open_flex
 from simtbx.diffBragg.utils import map_hkl_list
 import sys
@@ -189,7 +189,6 @@ else:
 if has_mpi:
     if rank == 0:
         print("Broadcasting imports")
-    #FatRefiner = comm.bcast(FatRefiner, root=0)
     EXP = comm.bcast(EXP)
     LOGICAL_OR = comm.bcast(LOGICAL_OR)
     ARANGE = comm.bcast(ARANGE)
@@ -224,7 +223,7 @@ if has_mpi:
     TetragonalManager = comm.bcast(TetragonalManager, root=0)
 
 
-class FatData:
+class GlobalData:
 
     def __init__(self):
         self.int_radius = 5  #
@@ -609,13 +608,13 @@ class FatData:
             if img_num == 0:  # only initialize the simulator after loading the first image
                 if args.sad:
                     if args.Fobslabel is not None:
-                        self.Fhkl_obs = FatData.open_mtz(args.Fobs, args.Fobslabel)
+                        self.Fhkl_obs = GlobalData.open_mtz(args.Fobs, args.Fobslabel)
                     else:
                         self.Fhkl_obs = open_flex(args.Fobs).as_amplitude_array()
                     self.Fhkl_ref = args.Fref
                     if args.Fref is not None:
                         if args.Freflabel is not None:
-                            self.Fhkl_ref = FatData.open_mtz(args.Fref, args.Freflabel)
+                            self.Fhkl_ref = GlobalData.open_mtz(args.Fref, args.Freflabel)
                         else:
                             self.Fhkl_ref = open_flex(args.Fref).as_amplitude_array()  # this reference miller array is used to track CC and R-factor
 
@@ -889,7 +888,7 @@ class FatData:
     def pre_refine_setup(self, i_trial=0, refine_fcell=None, refine_spot_scale=None, refine_Umatrix=None, 
             refine_Bmatrix=None, refine_ncells=None, refine_bg=None, max_calls=None, x_init=None):
 
-        self.RUC = FatRefiner(
+        self.RUC = GlobalRefiner(
             n_total_params=self.n_total_unknowns,
             n_local_params=self.n_local_unknowns,
             n_global_params=self.n_global_params,
@@ -1185,7 +1184,7 @@ class FatData:
 # LOAD STAGE #
 ##############
 
-B = FatData()
+B = GlobalData()
 fnames = glob(args.glob)
 B.fnames = fnames
 B.load()
