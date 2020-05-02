@@ -149,6 +149,11 @@ data_wavelengths_all = spec_h5["wavelengths"][()].astype(float)
 data_wave_ebeams_all = spec_h5["wave_ebeams"][()].astype(float)
 
 ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
+# from the bs7_100000.h5  the average flux is
+#In [9]: ave_flux_across_exp
+#Out[9]: 81906698000.75507
+
+
 from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW, WAVELEN_LOW, ENERGY_HIGH, WAVELEN_HIGH
 if args.sad:
     print("Rank %d: Loading 4bs7 structure factors!" % rank)
