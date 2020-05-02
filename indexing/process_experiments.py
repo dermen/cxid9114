@@ -32,7 +32,7 @@ parser.add_argument("--indexdirname", type=str, default=None)
 parser.add_argument("--symbol", default="P43212", type=str)
 parser.add_argument("--sanityplots", action='store_true')
 parser.add_argument("--pause", type=float, default=0.5)
-parser.add_argument("--bgest", type=str, required=True, help="path to estimated background")
+parser.add_argument("--bgestimate", type=str, required=True, help="path to estimated background")
 args = parser.parse_args()
 
 GAIN = 28
@@ -101,7 +101,7 @@ def min_panel(coef, data, bg_est):
     return np.sum(residual ** 2)
 
 import dxtbx
-BG_ESTIMATE = np.array([ I.as_numpy_array() for I in  dxtbx.load(args.bgest).get_raw_data(0)])
+BG_ESTIMATE = np.array([ I.as_numpy_array() for I in  dxtbx.load(args.bgestimate).get_raw_data(0)])
 
 
 # Load in the reflection tables and experiment lists

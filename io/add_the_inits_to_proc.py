@@ -20,7 +20,8 @@ for n in unames:
     dfn = df.query("proc_fnames=='%s'"%n)
     dfn_sort = dfn.sort_values(by='proc_shot_idx')
     Amats = np.array([ a for a in dfn_sort.Amats.values] )
-    scales = dfn_sort.log_scales
+    scales = dfn_sort.spot_scales
+    ncells = dfn_sort.ncells
     h5 = h5py.File(n, "r+")
     A = h5["Amatrices"]
     assert A.shape[0] == len(Amats)
@@ -31,10 +32,18 @@ for n in unames:
     if k in h5:
         del  h5[k]
     h5.create_dataset(k, data=Amats)
-    k = "crystal_scale_%s" % args.preopttag
+    
+    k = "spot_scale_%s" % args.preopttag
     if k in h5:
         del h5[k]
     h5.create_dataset(k, data=scales)
+    
+    k = "ncells_%s" % args.preopttag
+    if k in h5:
+        del h5[k]
+    h5.create_dataset(k, data=ncells)
+    
+    
     h5.close()
     print n
     
