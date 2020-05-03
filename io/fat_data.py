@@ -72,6 +72,8 @@ if rank == 0:
     parser.add_argument("--usepreoptAmat", action="store_true")
     parser.add_argument("--usepreoptscale", action="store_true")
     parser.add_argument("--usepreoptncells", action="store_true")
+    parser.add_argument("--usepreoptbg", action="store_true")
+
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--p9", action="store_true")
@@ -123,6 +125,7 @@ if rank == 0:
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--savepickleonly", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
+    parser.add_argument("--bgextracted", action="store_true")
 
     args = parser.parse_args()
     import os
@@ -278,6 +281,7 @@ class GlobalData:
         self.SIM = None  # simulator; one per rank!
         self.all_roi_imgs = {}
         self.all_fnames = {}
+        self.background_estimate = None
         self.all_proc_idx = {}
         self.all_proc_fnames = {}
         self.m_init = {}
@@ -286,6 +290,7 @@ class GlobalData:
         self.miller_data_map = None
 
         self.reduced_bbox_keeper_flags = {}
+        self.all_bg_coef = {}
 
     def initialize_simulator(self, init_crystal, init_beam, init_spectrum, init_miller_array):
         # create the sim_data instance that the refiner will use to run diffBragg
@@ -453,8 +458,10 @@ class GlobalData:
         #    self.my_open_files[fidx] = h5py.File(fpath, "r")
         Ntot = 0
 
-        self.n_shots = len(my_shots)
-        for img_num, (fname_idx, shot_idx) in enumerate(my_shots):
+        #self.n_shots = len(my_shots)
+        self.n_shots = 0
+        img_num = 0
+        for iii, (fname_idx, shot_idx) in enumerate(my_shots):
             
             h = self.my_open_files[fname_idx]
 
@@ -464,6 +471,10 @@ class GlobalData:
                 npz_path = npz_path.decode()
             except AttributeError:
                 pass
+
+            if ALIST is not None:
+                if BASENAME(npz_path) not in ALIST:
+                    continue
 
             if args.imgdirname is not None:
                 import os
@@ -521,9 +532,22 @@ class GlobalData:
             bbox_dset = h["bboxes"]["shot%d" % shot_idx]
             n_bboxes_total = bbox_dset.shape[0]
             # is the shoe box within the resolution ring and does it have significant SNR (see filter_bboxes.py)
-
             # tilt plane to the background pixels in the shoe boxes
             tilt_abc_dset = h["tilt_abc"]["shot%d" % shot_idx]
+            if args.usepreoptbg and not args.bgextracted:
+                tilt_abc_dset = h["tilt_abc_%s" % args.preopttag]["shot%d" % shot_idx]
+
+            bg_coef = -1
+            if args.bgextracted:
+                # if its the first image, load the backgorund estimate array
+                if img_num==0:
+                    # this should be same length as number of panels in detector e.g. len(CSPAD)
+                    self.background_estimate = h["background_estimate"][()] / self.gain
+                    
+                bg_coef = h["background_coefficients"][shot_idx]
+                if args.usepreoptbg:
+                    bg_coef = h["background_coefficients_%s" % args.preopttag][shot_idx]
+
             # miller indices (not yet reduced by symm equivs)
             Hi_dset = h["Hi"]["shot%d" % shot_idx]
             try:
@@ -736,6 +760,10 @@ class GlobalData:
             self.all_Hi_asu[img_num] = Hi_asu
             self.all_proc_idx[img_num] = proc_file_idx
             self.all_shot_idx[img_num] = shot_idx  # this is the index of the shot in the process*h5 file
+            self.all_bg_coef[img_num] = bg_coef
+
+            img_num += 1
+            self.n_shots += 1
 
         for h in self.my_open_files.values():
             h.close()
@@ -817,9 +845,15 @@ class GlobalData:
 
         # NOTE: n_param_per_image is no longer a constant when we refine background planes
         # NOTE: (unless we do a per-image polynomial fit background plane model)
-        self.n_param_per_image = [n_rot_param + n_per_image_ncells_param + n_per_image_ucell_param +
-                             n_per_image_scale_param + 3*n_spot_per_image[i]
-                             for i in range(n_images)]
+        
+        if args.bgextracted:
+            self.n_param_per_image = [n_rot_param + n_per_image_ncells_param + n_per_image_ucell_param +
+                                 n_per_image_scale_param + 3*n_spot_per_image[i]
+                                 for i in range(n_images)]
+        else:
+            self.n_param_per_image = [n_rot_param + n_per_image_ncells_param + n_per_image_ucell_param +
+                             n_per_image_scale_param + 1
+                             for _ in range(n_images)]
 
         total_per_image_unknowns = sum(self.n_param_per_image)
 
@@ -932,7 +966,8 @@ class GlobalData:
             all_crystal_scales=self.all_crystal_scales,
             perturb_fcell=args.perturbfcell,
             global_ncells=args.globalNcells, global_ucell=args.globalUcell,
-            shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)})
+            shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)},
+            shot_bg_coef=self.all_bg_coef, background_estimate=self.background_estimate)
         
         self.i_trial = i_trial
 
@@ -952,6 +987,7 @@ class GlobalData:
             self.RUC.max_calls = max_calls 
 
         self.RUC.x_init = x_init
+        self.RUC.bg_extracted = args.bgextracted
         
         self.RUC.recenter = args.recenter
         # parameter rescaling...
@@ -1087,45 +1123,76 @@ class GlobalData:
         if image_corr is None:
             image_corr = [-1]*len(my_shots)
         for i_shot in my_shots:
-            ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
-            Bmat = self.RUC.get_refined_Bmatrix(i_shot)
+            rotX = self.RUC._get_rotX(i_shot)
+            rotY = self.RUC._get_rotY(i_shot)
+            rotZ = self.RUC._get_rotZ(i_shot)
+            if not args.savepickleonly:
+                ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
+                Bmat = self.RUC.get_refined_Bmatrix(i_shot)
+            else:
+                ang,ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, anglesXYZ = (rotX, rotY, rotZ))
+                pars = self.RUC._get_ucell_vars(i_shot)
+                self.all_ucell_mans[i_shot].variables = pars
+                Bmat = self.all_ucell_mans[i_shot].B_recipspace 
+
+            bg_coef = -1
+            if args.bgextracted:
+                bg_coef = self.RUC._get_bg_coef(i_shot)
+            
             C = self.RUC.CRYSTAL_MODELS[i_shot]
             C.set_B(Bmat)
             try:
                 C.rotate_around_origin(ax, ang)
             except RuntimeError:
                 pass
+#############################################
+            if args.savepickleonly:
+	        a_init, _, c_init, _, _, _ = self.all_crystal_models[i_shot].get_unit_cell().parameters()
+	        a_tru, b_tru, c_tru = self.all_crystal_GT[i_shot].get_real_space_vectors()
+	        try:
+		    final_misori = compare_with_ground_truth(a_tru, b_tru, c_tru,[C],symbol="P43212")[0]
+	        except Exception as err:
+		    final_misori = -1
+###############################
+
             Amat_refined = C.get_A()
             ucell_a,_,ucell_c,_,_,_ = C.get_unit_cell().parameters()
 
             fcell_xstart = self.RUC.fcell_xstart
             ucell_xstart = self.RUC.ucell_xstart[i_shot]
-            rotX = self.RUC._get_rotX(i_shot)
-            rotY = self.RUC._get_rotY(i_shot)
-            rotZ = self.RUC._get_rotZ(i_shot)
             scale_xpos = self.RUC.spot_scale_xpos[i_shot]
             ncells_xpos = self.RUC.ncells_xpos[i_shot]
             nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
-            bgplane_a_xpos = [self.RUC.bg_a_xstart[i_shot][i_spot] for i_spot in range(nspots)]
-            bgplane_b_xpos = [self.RUC.bg_b_xstart[i_shot][i_spot] for i_spot in range(nspots)]
-            bgplane_c_xpos = [self.RUC.bg_c_xstart[i_shot][i_spot] for i_spot in range(nspots)]
-            bgplane_xpos = list(zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos))
+           
+            bgplane_xpos = -1 
+            bgplane = 0
+            if not args.bgextracted:
+                bgplane_a_xpos = [self.RUC.bg_a_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+                bgplane_b_xpos = [self.RUC.bg_b_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+                bgplane_c_xpos = [self.RUC.bg_c_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+                bgplane_xpos = list(zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos))
+                bgplane = [self.RUC._get_bg_vals(i_shot, i_spot) for i_spot in range(nspots)]
 
             crystal_scale = self.RUC._get_spot_scale(i_shot)
             proc_h5_fname = self.all_proc_fnames[i_shot]
             proc_h5_idx = self.all_shot_idx[i_shot]
             proc_bbox_idx = self.all_proc_idx[i_shot]
 
-            bgplane = [self.RUC._get_bg_vals(i_shot, i_spot) for i_spot in range(nspots)]
             ncells_val = self.RUC._get_m_val(i_shot)
-            init_misori = self.RUC.get_init_misorientation(i_shot)
-            final_misori = self.RUC.get_current_misorientation(i_shot)
-
-            img_corr= self.RUC._get_image_correlation(i_shot)
-            init_img_corr = self.RUC._get_init_image_correlation(i_shot)
+            if not args.savepickleonly: 
+                init_misori = self.RUC.get_init_misorientation(i_shot)
+                final_misori = self.RUC.get_current_misorientation(i_shot)
+                img_corr= self.RUC._get_image_correlation(i_shot)
+                init_img_corr = self.RUC._get_init_image_correlation(i_shot)
+            else:
+                init_misori = self.init_misori[i_shot]
+                #final_misori = self.init_misori[i_shot]  # computed above
+                img_corr = -1
+                init_img_corr = -1
+            
             data_to_send.append((proc_h5_fname, proc_h5_idx, proc_bbox_idx,crystal_scale, Amat_refined, ncells_val, bgplane, \
                 img_corr, init_img_corr, fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, \
-                ncells_xpos, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c))
+                ncells_xpos, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c, bg_coef))
         
         if has_mpi:
             data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
@@ -1134,7 +1201,7 @@ class GlobalData:
             import h5py
             fnames, shot_idx, bbox_idx, xtal_scales, Amats, ncells_vals, bgplanes, image_corr, init_img_corr, \
                 fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xpos, bgplane_xpos, \
-                init_misori, final_misori, ucell_a, ucell_c = zip(*data_to_send)
+                init_misori, final_misori, ucell_a, ucell_c, bg_coef = zip(*data_to_send)
 
             df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx, "bbox_idx": bbox_idx,
                                    "spot_scales": xtal_scales, "Amats": Amats, "ncells": ncells_vals,
@@ -1143,6 +1210,7 @@ class GlobalData:
                                    "fcell_xstart": fcell_xstart,
                                    "ucell_xstart": ucell_xstart,
                                    "init_misorient": init_misori, "final_misorient": final_misori,
+                                   "bg_coef": bg_coef,
                                    "rotX": rotX,
                                    "rotY": rotY,
                                    "rotZ": rotZ,
@@ -1162,6 +1230,7 @@ class GlobalData:
 
     def init_misset_results(self):
         results = []
+        self.init_misori = {}
         nshots = len(self.all_crystal_GT)
         for i_shot in range(nshots): # (angx, angy, angz, a,c) in enumerate(zip(rotx, roty, rotz, avals, cvals)):
 
@@ -1175,6 +1244,7 @@ class GlobalData:
                 print("Rank %d img %d err %s" % (rank, i_shot, err))
                 angular_offset_init = -1
             results.append(angular_offset_init)
+            self.init_misori[i_shot] = angular_offset_init
         return results
 
     #TODO: test this method ;)
