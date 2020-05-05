@@ -1070,7 +1070,9 @@ class GlobalData:
         #TODO optional properties.. make this obvious
         self.RUC.FNAMES = self.all_fnames
         self.RUC.PROC_FNAMES = self.all_proc_fnames
-        self.RUC.PROC_IDX = self.all_proc_idx
+        self.RUC.PROC_IDX = self.all_proc_fnames
+        self.RUC.BBOX_IDX = self.all_proc_idx
+
         self.RUC.Hi = self.all_Hi
         self.RUC.output_dir = args.outdir
         if args.verbose:
