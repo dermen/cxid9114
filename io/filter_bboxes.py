@@ -160,8 +160,8 @@ def main():
             reso = 1 / sqrt((hi ** 2 + ki ** 2) / 114 / 114 + li ** 2 / 32.5 / 32.5)
         else:
             # TODO: why does 0,0,0 ever appear as a reflection ? Should never happen...
-            reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79. / 79. + li ** 2 / 38. / 38.)
-        in_reso_ring = array([resmin < d < resmax for d in reso])
+            reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79.1 / 79.1 + li ** 2 / 38.4 / 38.4)
+        in_reso_ring = array([resmin <= d < resmax for d in reso])
 
         # Dirty integrater, sets integration region as disk of diameter 2*int_radius pixels
         if len(img_data.shape) == 2:  # single panel image
