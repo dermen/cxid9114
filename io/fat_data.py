@@ -78,6 +78,7 @@ if rank == 0:
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--p9", action="store_true")
     parser.add_argument("--ucellsigma", default=0.005, type=float)
+    parser.add_argument("--bgcoefsigma", default=1, type=float)
     parser.add_argument("--ncellssigma", default=0.0005, type=float)
     parser.add_argument("--rotXYZsigma", nargs=3,  default=[0.003, 0.003, 0.001], type=float)
     parser.add_argument("--bgsigma", nargs=3,  default=[0.005, 0.005, 0.01], type=float)
@@ -846,7 +847,7 @@ class GlobalData:
         # NOTE: n_param_per_image is no longer a constant when we refine background planes
         # NOTE: (unless we do a per-image polynomial fit background plane model)
         
-        if args.bgextracted:
+        if not args.bgextracted:
             self.n_param_per_image = [n_rot_param + n_per_image_ncells_param + n_per_image_ucell_param +
                                  n_per_image_scale_param + 3*n_spot_per_image[i]
                                  for i in range(n_images)]
@@ -1005,7 +1006,8 @@ class GlobalData:
         self.RUC.rotY_sigma = args.rotXYZsigma[1]
         self.RUC.rotZ_sigma = args.rotXYZsigma[2]
         self.RUC.ucell_sigmas = [args.ucellsigma, args.ucellsigma]
-        self.RUC.originZ_sigma = 0.01
+        self.RUC.bg_coef_sigma = args.bgcoefsigma
+        self.RUC.originZ_sigma = 1  # 0.01
         self.RUC.m_sigma = args.ncellssigma
         self.RUC.spot_scale_sigma = args.spotscalesigma  # stage1/2.01
         asig, bsig, csig = args.bgsigma
