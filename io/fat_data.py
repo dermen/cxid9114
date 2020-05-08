@@ -31,6 +31,7 @@ if rank == 0:
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--readoutless", action="store_true")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
+    parser.add_argument("--tradeps", default=5e-10, type=float, help="traditional convergence epsilon. Convergence happens if |G| < |X|*tradeps where |G| is norm gradient and |X| is norm parameters")
     parser.add_argument("--imagecorr", action="store_true")
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--fixrotZ", action='store_true')
@@ -45,6 +46,7 @@ if rank == 0:
     parser.add_argument("--gainval", default=28, type=float)
     parser.add_argument("--curseoftheblackpearl", action="store_true", help="This argument does nothing... ")
     parser.add_argument("--ignorelinelow", action="store_true", help="ignore line search in LBFGS")
+    parser.add_argument("--xrefinedonly", action="store_true" )
     parser.add_argument("--outdir", type=str, default=None, help="where to write output files")
     parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
@@ -115,6 +117,8 @@ if rank == 0:
     parser.add_argument("--Fref", type=str, default=None)
     parser.add_argument("--keeperstags", type=str, nargs="+", default=["keepers"], help="names of keepers selection flags")
     parser.add_argument("--plotstats", action="store_true")
+    parser.add_argument("--freezerange", nargs=2,  default=None, type=float, 
+        help="2 args specifying lower and upper resolution bounds, then only miller indices within the bound are refined")
     parser.add_argument("--fcell", nargs="+", default=None, type=int)
     parser.add_argument("--ncells", nargs="+", default=None, type=int)
     parser.add_argument("--scale", nargs="+", default=None, type=int)
@@ -129,6 +133,10 @@ if rank == 0:
     parser.add_argument("--bgextracted", action="store_true")
 
     args = parser.parse_args()
+    print("ARGS:")
+    print(args)
+    import sys
+    print("COMMAND LINE LOOKED LIKE:\n %s" % " ".join(sys.argv))
     import os
     if args.outdir is not None:
         if not os.path.exists(args.outdir):
@@ -947,6 +955,18 @@ class GlobalData:
         # we will need the inverse map during refinement to update the miller array in diffBragg, so we cache it here
         self.asu_from_idx = {i: h for i, h in enumerate(set(self.Hi_asu_all_ranks))}
 
+        # will we only refine a range of miller indices ? 
+        self.freeze_idx = None
+        if args.freezerange is not None:
+            self.freeze_idx = {}
+            resmin, resmax = args.freezerange
+            for h in idx_from_asu:
+                res = self.res_from_asu[h]
+                if res >= resmin  and res < resmax:
+                    self.freeze_idx[h] = False
+                else:
+                    self.freeze_idx[h] = True
+
     def pre_refine_setup(self, i_trial=0, refine_fcell=None, refine_spot_scale=None, refine_Umatrix=None, 
             refine_Bmatrix=None, refine_ncells=None, refine_bg=None, max_calls=None, x_init=None):
 
@@ -988,6 +1008,7 @@ class GlobalData:
             self.RUC.max_calls = max_calls 
 
         self.RUC.x_init = x_init
+        self.RUC.only_pass_refined_x_to_lbfgs = args.xrefinedonly
         self.RUC.bg_extracted = args.bgextracted
         
         self.RUC.recenter = args.recenter
@@ -1020,6 +1041,7 @@ class GlobalData:
         # end of parameter rescaling
 
         # plot things
+        self.RUC.sigma_r = 3./args.gainval
         self.RUC.gradient_only=args.gradientonly
         self.RUC.stpmax = args.stpmax
         self.RUC.debug = args.debug
@@ -1045,6 +1067,7 @@ class GlobalData:
 
         self.RUC.idx_from_asu = self.idx_from_asu
         self.RUC.asu_from_idx = self.asu_from_idx
+        self.RUC.freeze_idx = self.freeze_idx
         self.RUC.scale_r1 = True
         self.RUC.request_diag_once = False
         self.RUC.S = self.SIM
@@ -1062,7 +1085,7 @@ class GlobalData:
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.poisson_only = args.poissononly
         self.RUC.plot_stride = args.stride
-        self.RUC.trad_conv_eps = 5e-10  # NOTE this is for single panel model
+        self.RUC.trad_conv_eps = args.tradeps #5e-10  # NOTE this is for single panel model
         self.RUC.verbose = False
         self.RUC.use_rot_priors = False
         self.RUC.use_ucell_priors = False
@@ -1121,7 +1144,7 @@ class GlobalData:
     def save_lbfgs_x_array_as_dataframe(self, outname):
         # Here we can save the refined parameters
         my_shots = self.all_shot_idx.keys()
-        x = self.RUC.x
+        x = self.RUC.Xall
         data_to_send = []
         image_corr = self.RUC.image_corr
         if image_corr is None:
@@ -1349,7 +1372,7 @@ if args.protocol=="per_shot":
                 print ("<><><><><><><><><><><><><><><><><><><><><><><>")
         if has_mpi:
             comm.Barrier()
-        x_init = B.RUC.x
+        x_init = B.RUC.Xall
 
         if rank==0:
             tdone = time.time()-tstart
@@ -1379,7 +1402,7 @@ elif args.protocol == "global":
             print ("<><><><><><><><><><><><><><><><><><><><><><><>")
         if has_mpi:
             comm.Barrier()
-        x_init = B.RUC.x
+        x_init = B.RUC.Xall
 
         if rank==0:
             tdone = time.time()-tstart
