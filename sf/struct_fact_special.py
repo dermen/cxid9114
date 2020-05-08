@@ -75,7 +75,7 @@ class Yb_scatter:
         return factor.fdp()
 
 
-def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_name=None):
+def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_name=None, only_yb=False):
     """
     generate the structure factors from a pdb
     for use with LD91
@@ -97,7 +97,7 @@ def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_n
         if sc.element_symbol() == "Yb":
             sc.fp = Yb.fp(wavelen_A)
             sc.fdp = Yb.fdp(wavelen_A)
-        else:
+        elif not only_yb:
             expected_henke = henke.table(
                 sc.element_symbol()).at_angstrom(wavelen_A)
             sc.fp = expected_henke.fp()

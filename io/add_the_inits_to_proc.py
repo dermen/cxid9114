@@ -6,6 +6,7 @@ parser.add_argument("--preopttag", default="preopt", type=str)
 parser.add_argument("--bgextracted", action="store_true")
 args = parser.parse_args()
 
+from IPython import embed
 import pandas
 import h5py
 import numpy as np
@@ -37,6 +38,9 @@ for n in unames:
     bg_coefs = []
     for i_shot in range(nshots):
         df_shot = dfn.query("proc_shot_idx==%d"%i_shot)
+        if len(df_shot)==0:
+            print("shot not in dataframe")
+            continue
         
         if not args.bgextracted:
             tilt_abc = h5["tilt_abc"]["shot%d"%i_shot][()]
