@@ -881,11 +881,14 @@ class GlobalData:
         # Gather so that each rank knows exactly how many local unknowns are on the other ranks
         if has_mpi:
             local_unknowns_per_rank = comm.gather(self.n_local_unknowns)
+        else:
+            local_unknowns_per_rank = [self.n_local_unknowns]
 
         if rank == 0:
             total_local_unknowns = sum(local_unknowns_per_rank)  # across all ranks
         else:
             total_local_unknowns = None
+        
         self.local_unknowns_across_all_ranks = total_local_unknowns
         if has_mpi:
             self.local_unknowns_across_all_ranks = comm.bcast(self.local_unknowns_across_all_ranks, root=0)
@@ -1223,7 +1226,7 @@ class GlobalData:
         
         if has_mpi:
             data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
-        if comm.rank == 0:
+        if rank == 0:
             import pandas
             import h5py
             fnames, shot_idx, bbox_idx, xtal_scales, Amats, ncells_vals, bgplanes, image_corr, init_img_corr, \

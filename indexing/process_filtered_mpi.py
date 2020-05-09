@@ -138,20 +138,14 @@ for i_shot in range(Nexper):
         fpath = fpath.split("/kaladin/")[1]
         fpath = os.path.join(args.imgdirname, fpath)
     # this is the file containing relevant simulation parameters..
-    h5 = h5py.File(fpath.replace(".npz", ""), 'r')
+    if args.noiseless:
+        h5 = h5py.File(fpath.replace(".noiseless.npz", ""), 'r')
+    else:
+        h5 = h5py.File(fpath.replace(".npz", ""), 'r')
     # get image pixels
     _fpath = fpath
-    noiseless_fpath = _fpath.replace(".npz", ".noiseless.npz")
-
-    if args.debug:
-        assert os.path.exists(noiseless_fpath)
-        imgs_noiseless = np.load(noiseless_fpath)["img"]
-    if args.noiseless:
-        # load the image that has no noise
-        assert os.path.exists(noiseless_fpath)
-        img_data = np.load(noiseless_fpath)["img"]
-    else:
-        img_data = np.load(_fpath)["img"]
+    
+    img_data = np.load(_fpath)["img"]
     # get simulation parameters
     mos_spread = float(h5["mos_spread"][()])
     Ncells_abc = tuple(map(int, h5["Ncells_abc"][()]) )
@@ -368,8 +362,13 @@ for i_shot in range(Nexper):
     did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
     boundary_spot = np.array(refls_predict['boundary'])
 
-    int_refl_path = os.path.join(indexdirname,
-                                 "idx-" + os.path.basename(fpath).replace(".h5.npz", ".h5_integrated.refl"))
+    if args.noiseless:
+        int_refl_path = os.path.join(indexdirname,
+                                     "idx-" + os.path.basename(fpath).replace(".h5.noiseless.npz", ".h5.noiseless_integrated.refl"))
+
+    else:
+        int_refl_path = os.path.join(indexdirname,
+                                     "idx-" + os.path.basename(fpath).replace(".h5.npz", ".h5_integrated.refl"))
     _R_shot = flex.reflection_table.from_file(int_refl_path)
     _R_shot_strong = Rmaster.select(Rmaster['id'] == i_shot)
 
