@@ -64,7 +64,7 @@ from cxid9114 import parameters, utils
 from cxid9114.prediction import prediction_utils
 from cxid9114.sf import struct_fact_special
 from cxid9114.parameters import WAVELEN_HIGH
-from tilt_fit.tilt_fit import tilt_fit
+from tilt_fit.tilt_fit import TiltPlanes
 
 n_gpu = args.ngpu
 
@@ -239,14 +239,15 @@ for i_shot in range(Nexper):
         # if the panel mask is not set, set it!
         if panel_integration_masks[panel_id] is None:
             panel_integration_masks[panel_id] = mask
-        # otherwise add to it
+        # otherwise add to it   NOTE I think this is only for polychromatic...
         else:
             panel_integration_masks[panel_id] = np.logical_or(mask, panel_integration_masks[panel_id])
 
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
-    # HERE WE LOAD THE STRONG SPOTS AND MAKE THEM INTO A MASK
+    # HERE WE LOAD THE STRONG SPOTS AND MAKE THEM INTO A MASK that can then be combined with the integration mask
+    # such that the combination mask essentially tells us which pixels are background pixels
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><>
-    # load strong spot reflections
+    # load strong spot reflections, these should be named after the images by stills process, hence the string manipulation
     refl_strong_fname = os.path.join(indexdirname,
                 "idx-"+os.path.basename(fpath.replace(".npz", "_strong.refl")))
     refls_strong = flex.reflection_table.from_file(refl_strong_fname) 
@@ -266,8 +267,7 @@ for i_shot in range(Nexper):
         mask = binary_dilation(mask, iterations=args.dilate)
         is_bg_pixel[panel_id] = ~mask  # strong spots should not be background pixels
 
-
-    # Combine strong spot mask and integration mask, both with there dilations, to get the best
+    # Combine strong spot mask and integration mask, both with dilations, to get the best
     # possible selection of background pixels..
     for i_predict in range(n_predict):
         ref_predict = refls_predict[i_predict]
@@ -282,59 +282,6 @@ for i_shot in range(Nexper):
         # update the background pixel selection with the expanded integration mask
         is_bg_pixel[i_panel, j1:j2, i1:i2] = ~np.logical_or(~bg, expanded_integration_mask)
 
-    # At this point is_bg_pixel returns False for pixels that are inside the expanded strong spot mask
-    # or the expanded integration mask
-    #if args.sanitycheck:
-    #    refl_i_f = refl_pkl.replace("_strong.refl", "_indexed.refl")
-    #    if not os.path.exists(refl_i_f):
-    #        raise IOError("Reflection indexed file  %s does not exist!" % refl_i_f)
-    #    R = utils.open_flex(refl_i_f)
-    #    Rpp = prediction_utils.refls_by_panelname(R)
-    #    for pid in Rpp:
-    #        bb_on_panel = np.array(bboxes)[np.array(bbox_panel_ids) == pid]
-
-    #        if args.plot is not None and rank == 0:
-    #            plt.figure(1)
-    #            plt.gcf().clear()
-    #            _dat = img_data[pid][img_data[pid] > 0]
-    #            m = _dat.mean()
-    #            s = _dat.std()
-    #            vmin = m-s
-    #            vmax = m+5*s
-    #            plt.imshow(img_data[pid], vmax=vmax, vmin=vmin, cmap='viridis')
-    #            nspots = len(bb_on_panel)
-    #            for i_spot in range(nspots):
-    #                x1, x2, y1, y2 = bb_on_panel[i_spot]
-    #                patch = plt.Rectangle(xy=(x1, y1), width=x2 - x1, height=y2 - y1, fc='none', ec='r')
-    #                plt.gca().add_patch(patch)
-    #            plt.title("Panel=%d" % pid)
-
-    #            # get the ground truth background plane and plot
-    #            if args.savefigdir is not None:
-    #                plt.savefig(os.path.join(args.savefigdir, "_figure%d.png" % pid))
-    #            plt.draw()
-    #            plt.pause(args.plot)
-
-    #        r_on_panel = Rpp[pid]
-    #        x, y, _ = prediction_utils.xyz_from_refl(r_on_panel)
-    #        x = np.array(x)-0.5
-    #        y = np.array(y)-0.5
-    #        Hi_on_panel = np.array(Hi)[np.array(bbox_panel_ids) == pid]
-
-    #        for i_spot, (x1, x2, y1, y2) in enumerate(bb_on_panel):
-    #            inX = np.logical_and(x1 < x, x < x2)
-    #            inY = np.logical_and(y1 < y, y < y2)
-    #            in_bb = inX & inY
-    #            if not any(in_bb):
-    #                continue
-
-    #            pos = np.where(in_bb)[0]
-    #            for p in pos:
-    #                h_pred_nb = Hi_on_panel[i_spot]
-    #                h_pred_stills = r_on_panel[p]["miller_index"]
-    #                print "panel:", pid, h_pred_nb, h_pred_stills
-    #    if args.savefigdir is not None:
-
     # <><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>
     #   RUN THE TILT PLANE HELPER FUNCTION
     # 1. Weighted fit of the background tilt plane
@@ -347,29 +294,103 @@ for i_shot in range(Nexper):
     exper.beam = BEAM
     exper.crystal = crystal
     exper.imageset = iset  # Exper.imageset
-    results = tilt_fit(
-        imgs=img_data, is_bg_pix=is_bg_pixel,
-        delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
-        exper=exper, predicted_refls=refls_predict, sb_pad=args.sbpad)
 
-    refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
+    refls_predict = TiltPlanes.prep_relfs_for_tiltalization(refls_predict, exper=El[0])
+
+    tiltnation = TiltPlanes(panel_imgs=img_data, panel_bg_masks=is_bg_pixel, panel_badpix_masks=None)
+    tiltnation.check_if_refls_are_formatted_for_this_class(refls_predict)
+    tiltnation.make_quick_bad_pixel_proximity_checker(refls_predict)
+    tiltnation.sigma_rdout = sigma_readout
+    tiltnation.adu_per_photon = GAIN
+    tiltnation.delta_Q = args.deltaq   #0.085
+    tiltnation.zinger_zscore = args.Z
+    detector_node = DET[0]  # all nodes should have same pixel size, detector distance, and dimension
+    tiltnation.pixsize_mm = detector_node.get_pixel_size()[0]
+    tiltnation.detdist_mm = detector_node.get_distance()
+    tiltnation.ave_wavelength_A = BEAM.get_wavelength()
+    tiltnation.min_background_pix_for_fit = 10
+    tiltnation.min_dist_to_bad_pix = 7
+
+    all_residual = []
+    mins = []
+    bboxes = []
+    tilt_abc = []
+    error_in_tilt = []
+    I_Leslie99 = []
+    varI_Leslie99 = []
+    did_i_index = []
+    boundary_spot = []
+    bbox_panel_ids = []
+    Hi = []
+
+    indexed_Hi = []
+    selected_ref_idx = []
+    for i_r in range(n_predict):
+        ref = refls_predict[i_r]
+
+        mil_idx = [int(hi) for hi in ref["miller_index"]]
+
+        if mil_idx == [0, 0, 0]:
+            continue
+
+        if mil_idx in indexed_Hi:
+            print("already indexed, this split across two panels!")
+            continue
+
+        result = tiltnation.integrate_shoebox(ref)
+        if result is None:
+            continue
+        shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag = result
+        if below_zero_flag:
+            print("Tilt plane dips below 0!")
+            continue
+        bboxes.append(shoebox_roi)
+        tilt_abc.append(coefs)
+        error_in_tilt.append(np.diag(variance_matrix).sum() )
+        I_Leslie99.append(Isum)
+        varI_Leslie99.append(varIsum)
+        bbox_panel_ids.append(int(ref["panel"]))
+        Hi.append(mil_idx)
+        did_i_index.append(True)
+        x1, x2, y1, y2 = shoebox_roi
+        if x1 == 0 or y1 == 0 or x2 == fs_dim or y2 == ss_dim:
+            boundary_spot.append(True)
+        else:
+            boundary_spot.append(False)
+        indexed_Hi.append(mil_idx)
+        selected_ref_idx.append(i_r)
+
+    chosen_selection = flex.bool([i in selected_ref_idx for i in range(len(refls_predict))])
+    refls_predict = refls_predict.select(chosen_selection)
+
     spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
-    spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0, leading to nan snr values..
-    shoeboxes = refls_predict['shoebox']
-    bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
-    bbox_panel_ids = np.array(refls_predict['panel'])
-    Hi = np.vstack(refls_predict['miller_index'])
-    did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
-    boundary_spot = np.array(refls_predict['boundary'])
+    spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0 or < 0, leading to nan snr values..
 
+    #results = tilt_fit(
+    #    imgs=img_data, is_bg_pix=is_bg_pixel,
+    #    delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
+    #    exper=exper, predicted_refls=refls_predict, sb_pad=args.sbpad)
+
+    #refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
+    #shoeboxes = refls_predict['shoebox']
+    #bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
+    #bbox_panel_ids = np.array(refls_predict['panel'])
+    #Hi = np.vstack(refls_predict['miller_index'])
+    #did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
+    #boundary_spot = np.array(refls_predict['boundary'])
+
+
+    ###################################################################
+    # get the integrated reflections from DIALS
     if args.noiseless:
         int_refl_path = os.path.join(indexdirname,
                                      "idx-" + os.path.basename(fpath).replace(".h5.noiseless.npz", ".h5.noiseless_integrated.refl"))
-
     else:
         int_refl_path = os.path.join(indexdirname,
                                      "idx-" + os.path.basename(fpath).replace(".h5.npz", ".h5_integrated.refl"))
-    _R_shot = flex.reflection_table.from_file(int_refl_path)
+    # integrated reflections on this shot (by DIALS)
+    _R_shot_int = flex.reflection_table.from_file(int_refl_path)
+    # strong reflections on this shot
     _R_shot_strong = Rmaster.select(Rmaster['id'] == i_shot)
 
     for _pid in range(len(DET)):
@@ -377,8 +398,8 @@ for i_shot in range(Nexper):
         x0, y0 = [], []
         x, y = [], []
 
-        rpp = prediction_utils.refls_by_panelname(refls_predict)
         # get nanoBragg spot prediction positions
+        rpp = prediction_utils.refls_by_panelname(refls_predict)
         if _pid in rpp:
             x, y, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(rpp[_pid]))
 
@@ -388,10 +409,13 @@ for i_shot in range(Nexper):
             xstrong, ystrong, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_shot_strong_panel))
 
         # get stills process prediction positions
-        _R_panel = _R_shot.select(_R_shot["panel"] == _pid)
+        _R_panel = _R_shot_int.select(_R_shot_int["panel"] == _pid)
         if len(_R_panel) > 0:
             x0, y0, _ = map(lambda x: np.array(x) - 0.5, prediction_utils.xyz_from_refl(_R_panel))
 
+        # this block of code compares positions of nanoBragg predictions and stills shots predictions
+        # and if they are witihn 0.9 pixels from each other, the miller indices are compared to
+        # ensure they are the same
         if list(x0) and list(x):
             tree = cKDTree(list(zip(x0, y0)))
             res = tree.query_ball_point(list(zip(x, y)), r=0.9)
@@ -412,7 +436,8 @@ for i_shot in range(Nexper):
                     print ("Bad: %s, %s" % (str(miller_stills), str(miller_nano)))
 
     bragg_hi += list(map(tuple, Hi))
-    stills_hi += list(_R_shot["miller_index"])
+    stills_hi += list(_R_shot_int["miller_index"])
+
     bragg_hi = list(set(bragg_hi))
     stills_hi = list(set(stills_hi))
 
@@ -422,11 +447,15 @@ for i_shot in range(Nexper):
     #FIXME why is 0,0,0 being predicted using nanoBragg code??
     if rank == 0:
         print ("RANK %d, SHOT %d : nstrong=%d (%d overall), nstills_pred=%d, (%d unique overall) nbragg_pred=%d (%d unique overall), nmismatch=%d"
-               % (rank, i_shot, len(_R_shot_strong), nstrong_tot, len(_R_shot), nstills_tot, len(refls_predict), nbragg_tot, nmismatch))
+               % (rank, i_shot, len(_R_shot_strong), nstrong_tot, len(_R_shot_int), nstills_tot, len(refls_predict), nbragg_tot, nmismatch))
 
-    if has_mpi and args.showcompleteness:
-        all_bragg_hi = comm.reduce(bragg_hi, MPI.SUM, root=0)
-        all_stills_hi = comm.reduce(stills_hi, MPI.SUM, root=0)
+    if args.showcompleteness:
+        if has_mpi:
+            all_bragg_hi = comm.reduce(bragg_hi, MPI.SUM, root=0)
+            all_stills_hi = comm.reduce(stills_hi, MPI.SUM, root=0)
+        else:
+            all_bragg_hi = deepcopy(bragg_hi)
+            all_stills_hi = deepcopy(stills_hi)
 
     if rank == 0 and args.showcompleteness:
         all_bragg_hi = utils.map_hkl_list(all_bragg_hi)
@@ -442,14 +471,19 @@ for i_shot in range(Nexper):
         stills_mset.setup_binner(d_max=999, d_min=2, n_bins=10)
         print("Stills process predictions:\n<><><><><><><><><><><><>")
         stills_mset.completeness(use_binning=True).show()
+        # TODO show multiplicity ?
 
     # <><><><><><><><><><><><><><><>
     # DO THE SANITY PLOTS (OPTIONAL)
     # <><><><><><><><><><><><><><><>
     if rank == 0 and args.sanityplots:
-        refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
+        import pandas
+        df = pandas.DataFrame({"bboxes": bboxes, "panel": bbox_panel_ids})  #,"xyzobs.px.value": xyzobs})
+        #refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
+        refls_predict_bypanel = df.groupby("panel")
         pause = args.pause
-        for panel_id in refls_predict_bypanel:
+        for panel_id in df.panel.unique():
+            panel_id = int(panel_id)
             panel_img = img_data[panel_id]
             m = panel_img.mean()
             s = panel_img.std()
@@ -457,29 +491,31 @@ for i_shot in range(Nexper):
             vmin = m - s
             ax.clear()
             im = ax.imshow(panel_img, vmax=vmax, vmin=vmin)
-            int_mask = np.zeros(panel_img.shape).astype(np.bool)
-            bg_mask = np.zeros(panel_img.shape).astype(np.bool)
-
-            for i_ref in range(len(refls_predict_bypanel[panel_id])):
-                ref = refls_predict_bypanel[panel_id][i_ref]
-                i1, i2, j1, j2, _, _ = ref['shoebox'].bbox
+            #int_mask = np.zeros(panel_img.shape).astype(np.bool)
+            #bg_mask = np.zeros(panel_img.shape).astype(np.bool)
+            df_p = refls_predict_bypanel.get_group(panel_id)
+            ax.set_title("Panel %d" % panel_id)
+            for i_ref in range(len(df_p)):
+                #ref = refls_predict_bypanel[panel_id][i_ref]
+                ref = df_p.iloc[i_ref]
+                i1, i2, j1, j2, _, _ = ref['bbox']
                 rect = plt.Rectangle(xy=(i1, j1), width=i2-i1, height=j2-j1, fc='none', ec='Deeppink')
                 plt.gca().add_patch(rect)
-                mask = ref['shoebox'].mask.as_numpy_array()[0]
-                int_mask[j1:j2, i1:i2] = np.logical_or(mask == 5, int_mask[j1:j2, i1:i2])
-                bg_mask[j1:j2, i1:i2] = np.logical_or(mask == 19, bg_mask[j1:j2, i1:i2])
+                #mask = ref['shoebox'].mask.as_numpy_array()[0]
+                #int_mask[j1:j2, i1:i2] = np.logical_or(mask == 5, int_mask[j1:j2, i1:i2])
+                #bg_mask[j1:j2, i1:i2] = np.logical_or(mask == 19, bg_mask[j1:j2, i1:i2])
             plt.draw()
             plt.pause(pause)
-            im.set_data(int_mask)
-            plt.title("panel%d: integration mask" % panel_id)
-            im.set_clim(0, 1)
-            plt.draw()
-            plt.pause(pause)
-            im.set_data(bg_mask)
-            plt.title("panel%d: background mask" % panel_id)
-            im.set_clim(0, 1)
-            plt.draw()
-            plt.pause(pause)
+            #im.set_data(int_mask)
+            #plt.title("panel%d: integration mask" % panel_id)
+            #im.set_clim(0, 1)
+            #plt.draw()
+            #plt.pause(pause)
+            #im.set_data(bg_mask)
+            #plt.title("panel%d: background mask" % panel_id)
+            #im.set_clim(0, 1)
+            #plt.draw()
+            #plt.pause(pause)
 
     all_paths.append(fpath)
     all_Amats.append(crystal.get_A())
