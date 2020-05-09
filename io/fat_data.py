@@ -1177,12 +1177,12 @@ class GlobalData:
                 pass
 #############################################
             if args.savepickleonly:
-	        a_init, _, c_init, _, _, _ = self.all_crystal_models[i_shot].get_unit_cell().parameters()
-	        a_tru, b_tru, c_tru = self.all_crystal_GT[i_shot].get_real_space_vectors()
-	        try:
-		    final_misori = compare_with_ground_truth(a_tru, b_tru, c_tru,[C],symbol="P43212")[0]
-	        except Exception as err:
-		    final_misori = -1
+                a_init, _, c_init, _, _, _ = self.all_crystal_models[i_shot].get_unit_cell().parameters()
+                a_tru, b_tru, c_tru = self.all_crystal_GT[i_shot].get_real_space_vectors()
+                try:
+                    final_misori = compare_with_ground_truth(a_tru, b_tru, c_tru,[C],symbol="P43212")[0]
+                except Exception as err:
+                    final_misori = -1
 ###############################
 
             Amat_refined = C.get_A()
