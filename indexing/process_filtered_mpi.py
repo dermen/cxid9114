@@ -9,6 +9,7 @@ parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
 parser.add_argument("--nocuda", action="store_true")
 parser.add_argument("--debug", action="store_true")
+parser.add_argument("--oldway", action="store_true")
 parser.add_argument("--showcompleteness", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--filteredexpt", type=str, required=True, help="filtered combined experiment file")
@@ -64,7 +65,7 @@ from cxid9114 import parameters, utils
 from cxid9114.prediction import prediction_utils
 from cxid9114.sf import struct_fact_special
 from cxid9114.parameters import WAVELEN_HIGH
-from tilt_fit.tilt_fit import TiltPlanes
+from tilt_fit.tilt_fit import tilt_fit, TiltPlanes
 
 n_gpu = args.ngpu
 
@@ -110,9 +111,6 @@ MPI.COMM_WORLD.Barrier()
 bs7_mil_ar = struct_fact_special.sfgen(WAVELEN_HIGH, "../sim/4bs7.pdb", yb_scatter_name="../sf/scanned_fp_fdp.tsv")
 datasf_mil_ar = struct_fact_special.load_4bs7_sf()
 
-#assert El_fnames
-#if rank == 0:
-#    print("I found %d fname" % len(El_fnames))
 all_paths = []
 all_Amats = []
 odir = args.o
@@ -127,8 +125,8 @@ for i_shot in range(Nexper):
     
     if i_shot % size != rank:
         continue
-    if rank == 0:
-        print("Rank 0: Doing shot %d / %d" % (i_shot + 1, Nexper))
+    if rank==0:
+        print("Rank %d: Doing shot %d / %d" % (rank, i_shot + 1, Nexper))
 
     # get the experiment stuffs
     Exper = El[i_shot] 
@@ -218,7 +216,6 @@ for i_shot in range(Nexper):
         show_params=args.show_params, accumulate=False, crystal_size_mm=xtal_size)
 
     assert len(energies) == 1  # sanity check TODO remove
-
     # make a reflection table from the simulations, using a simple threshold
     refls_predict = prediction_utils.refls_from_sims(simsAB[0], DET, BEAM, thresh=args.thresh)
     if not refls_predict:
@@ -295,89 +292,92 @@ for i_shot in range(Nexper):
     exper.crystal = crystal
     exper.imageset = iset  # Exper.imageset
 
-    refls_predict = TiltPlanes.prep_relfs_for_tiltalization(refls_predict, exper=El[0])
+    if not args.oldway:
+        refls_predict = TiltPlanes.prep_relfs_for_tiltalization(refls_predict, exper=exper)
 
-    tiltnation = TiltPlanes(panel_imgs=img_data, panel_bg_masks=is_bg_pixel, panel_badpix_masks=None)
-    tiltnation.check_if_refls_are_formatted_for_this_class(refls_predict)
-    tiltnation.make_quick_bad_pixel_proximity_checker(refls_predict)
-    tiltnation.sigma_rdout = sigma_readout
-    tiltnation.adu_per_photon = GAIN
-    tiltnation.delta_Q = args.deltaq   #0.085
-    tiltnation.zinger_zscore = args.Z
-    detector_node = DET[0]  # all nodes should have same pixel size, detector distance, and dimension
-    tiltnation.pixsize_mm = detector_node.get_pixel_size()[0]
-    tiltnation.detdist_mm = detector_node.get_distance()
-    tiltnation.ave_wavelength_A = BEAM.get_wavelength()
-    tiltnation.min_background_pix_for_fit = 10
-    tiltnation.min_dist_to_bad_pix = 7
+        tiltnation = TiltPlanes(panel_imgs=img_data, panel_bg_masks=is_bg_pixel, panel_badpix_masks=None)
+        tiltnation.check_if_refls_are_formatted_for_this_class(refls_predict)
+        tiltnation.make_quick_bad_pixel_proximity_checker(refls_predict)
+        tiltnation.sigma_rdout = sigma_readout
+        tiltnation.adu_per_photon = GAIN
+        tiltnation.delta_Q = args.deltaq   #0.085
+        tiltnation.zinger_zscore = args.Z
+        detector_node = DET[0]  # all nodes should have same pixel size, detector distance, and dimension
+        tiltnation.pixsize_mm = detector_node.get_pixel_size()[0]
+        tiltnation.detdist_mm = detector_node.get_distance()
+        tiltnation.ave_wavelength_A = BEAM.get_wavelength()
+        tiltnation.min_background_pix_for_fit = 10
+        tiltnation.min_dist_to_bad_pix = 7
 
-    all_residual = []
-    mins = []
-    bboxes = []
-    tilt_abc = []
-    error_in_tilt = []
-    I_Leslie99 = []
-    varI_Leslie99 = []
-    did_i_index = []
-    boundary_spot = []
-    bbox_panel_ids = []
-    Hi = []
+        all_residual = []
+        mins = []
+        bboxes = []
+        tilt_abc = []
+        error_in_tilt = []
+        I_Leslie99 = []
+        varI_Leslie99 = []
+        did_i_index = []
+        boundary_spot = []
+        bbox_panel_ids = []
+        Hi = []
 
-    indexed_Hi = []
-    selected_ref_idx = []
-    for i_r in range(n_predict):
-        ref = refls_predict[i_r]
+        indexed_Hi = []
+        selected_ref_idx = []
+        for i_r in range(n_predict):
+            ref = refls_predict[i_r]
+            mil_idx = [int(hi) for hi in ref["miller_index"]]
 
-        mil_idx = [int(hi) for hi in ref["miller_index"]]
+            if mil_idx == [0, 0, 0]:
+                continue
 
-        if mil_idx == [0, 0, 0]:
-            continue
+            if mil_idx in indexed_Hi:
+                print("already indexed, this split across two panels!")
+                continue
 
-        if mil_idx in indexed_Hi:
-            print("already indexed, this split across two panels!")
-            continue
+            result = tiltnation.integrate_shoebox(ref)
+            if result is None:
+                continue
+            shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag = result
+            if below_zero_flag:
+                print("Tilt plane dips below 0!")
+                continue
+            
+            bboxes.append(shoebox_roi)
+            tilt_abc.append(coefs)
+            error_in_tilt.append(np.diag(variance_matrix).sum() )
+            I_Leslie99.append(Isum)
+            varI_Leslie99.append(varIsum)
+            bbox_panel_ids.append(int(ref["panel"]))
+            Hi.append(mil_idx)
+            did_i_index.append(True)
+            x1, x2, y1, y2 = shoebox_roi
+            if x1 == 0 or y1 == 0 or x2 == fs_dim or y2 == ss_dim:
+                boundary_spot.append(True)
+            else:
+                boundary_spot.append(False)
+            indexed_Hi.append(mil_idx)
+            selected_ref_idx.append(i_r)
 
-        result = tiltnation.integrate_shoebox(ref)
-        if result is None:
-            continue
-        shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag = result
-        if below_zero_flag:
-            print("Tilt plane dips below 0!")
-            continue
-        bboxes.append(shoebox_roi)
-        tilt_abc.append(coefs)
-        error_in_tilt.append(np.diag(variance_matrix).sum() )
-        I_Leslie99.append(Isum)
-        varI_Leslie99.append(varIsum)
-        bbox_panel_ids.append(int(ref["panel"]))
-        Hi.append(mil_idx)
-        did_i_index.append(True)
-        x1, x2, y1, y2 = shoebox_roi
-        if x1 == 0 or y1 == 0 or x2 == fs_dim or y2 == ss_dim:
-            boundary_spot.append(True)
-        else:
-            boundary_spot.append(False)
-        indexed_Hi.append(mil_idx)
-        selected_ref_idx.append(i_r)
+        chosen_selection = flex.bool([i in selected_ref_idx for i in range(n_predict)])
+        refls_predict = refls_predict.select(chosen_selection)
+        spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
+        spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0 or < 0, leading to nan snr values..
 
-    chosen_selection = flex.bool([i in selected_ref_idx for i in range(len(refls_predict))])
-    refls_predict = refls_predict.select(chosen_selection)
+    if args.oldway:
+        results = tilt_fit(
+            imgs=img_data, is_bg_pix=is_bg_pixel,
+            delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
+            exper=exper, predicted_refls=refls_predict, sb_pad=args.sbpad)
 
-    spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
-    spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0 or < 0, leading to nan snr values..
-
-    #results = tilt_fit(
-    #    imgs=img_data, is_bg_pix=is_bg_pixel,
-    #    delta_q=args.deltaq, photon_gain=GAIN, sigma_rdout=sigma_readout, zinger_zscore=args.Z,
-    #    exper=exper, predicted_refls=refls_predict, sb_pad=args.sbpad)
-
-    #refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
-    #shoeboxes = refls_predict['shoebox']
-    #bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
-    #bbox_panel_ids = np.array(refls_predict['panel'])
-    #Hi = np.vstack(refls_predict['miller_index'])
-    #did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
-    #boundary_spot = np.array(refls_predict['boundary'])
+        refls_predict, tilt_abc, error_in_tilt, I_Leslie99, varI_Leslie99 = results
+        shoeboxes = refls_predict['shoebox']
+        bboxes = np.vstack([list(sb.bbox)[:4] for sb in shoeboxes])
+        bbox_panel_ids = np.array(refls_predict['panel'])
+        Hi = np.vstack(refls_predict['miller_index'])
+        did_i_index = np.array(refls_predict['id']) != -1  # refls that didnt index should be labeled with -1
+        boundary_spot = np.array(refls_predict['boundary'])
+        spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
+        spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0 or < 0, leading to nan snr values..
 
 
     ###################################################################
@@ -447,9 +447,10 @@ for i_shot in range(Nexper):
     #FIXME why is 0,0,0 being predicted using nanoBragg code??
     if rank == 0:
         print ("RANK %d, SHOT %d : nstrong=%d (%d overall), nstills_pred=%d, (%d unique overall) nbragg_pred=%d (%d unique overall), nmismatch=%d"
-               % (rank, i_shot, len(_R_shot_strong), nstrong_tot, len(_R_shot_int), nstills_tot, len(refls_predict), nbragg_tot, nmismatch))
+                   % (rank, i_shot, len(_R_shot_strong), nstrong_tot, len(_R_shot_int), nstills_tot, len(refls_predict), nbragg_tot, nmismatch))
 
     if args.showcompleteness:
+        assert size==1
         if has_mpi:
             all_bragg_hi = comm.reduce(bragg_hi, MPI.SUM, root=0)
             all_stills_hi = comm.reduce(stills_hi, MPI.SUM, root=0)
@@ -478,7 +479,7 @@ for i_shot in range(Nexper):
     # <><><><><><><><><><><><><><><>
     if rank == 0 and args.sanityplots:
         import pandas
-        df = pandas.DataFrame({"bboxes": bboxes, "panel": bbox_panel_ids})  #,"xyzobs.px.value": xyzobs})
+        df = pandas.DataFrame({"bbox": bboxes, "panel": bbox_panel_ids})  #,"xyzobs.px.value": xyzobs})
         #refls_predict_bypanel = prediction_utils.refls_by_panelname(refls_predict)
         refls_predict_bypanel = df.groupby("panel")
         pause = args.pause
@@ -498,7 +499,7 @@ for i_shot in range(Nexper):
             for i_ref in range(len(df_p)):
                 #ref = refls_predict_bypanel[panel_id][i_ref]
                 ref = df_p.iloc[i_ref]
-                i1, i2, j1, j2, _, _ = ref['bbox']
+                i1, i2, j1, j2 = ref['bbox']
                 rect = plt.Rectangle(xy=(i1, j1), width=i2-i1, height=j2-j1, fc='none', ec='Deeppink')
                 plt.gca().add_patch(rect)
                 #mask = ref['shoebox'].mask.as_numpy_array()[0]
@@ -520,7 +521,7 @@ for i_shot in range(Nexper):
     all_paths.append(fpath)
     all_Amats.append(crystal.get_A())
     if rank == 0:
-        print("Rank0: writing")
+        print("Rank%d: writing" % rank)
     # save the output!
     writer.create_dataset("bboxes/shot%d" % n_processed, data=bboxes,  dtype=np.int, compression="lzf" )
     writer.create_dataset("tilt_abc/shot%d" % n_processed, data=tilt_abc,  dtype=np.float32, compression="lzf" )
@@ -536,8 +537,8 @@ for i_shot in range(Nexper):
     keepers = np.ones(len(bboxes)).astype(np.bool)
     writer.create_dataset("bboxes/keepers%d" % n_processed, data=keepers, dtype=np.bool, compression="lzf")
 
-    if rank == 0:
-        print("Rank0: Done writing")
+    if rank==0:
+        print("Rank%d: Done writing" % rank)
     n_processed += 1
 
 writer.create_dataset("Amatrices", data=all_Amats, compression="lzf")

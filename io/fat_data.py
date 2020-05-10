@@ -490,9 +490,9 @@ class GlobalData:
                 npz_path = npz_path.split("/kaladin/")[1]
                 npz_path = os.path.join(args.imgdirname, npz_path)
 
-            if args.noiseless:
-                noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
-                img_handle = numpy_load(noiseless_path)
+            #if args.noiseless:
+            #    noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
+            #    img_handle = numpy_load(noiseless_path)
 
             elif args.readoutless:
                 import os
@@ -606,6 +606,8 @@ class GlobalData:
             # load some ground truth data from the simulation dumps (e.g. spectrum)
             #h5_fname = h["h5_path"][shot_idx].replace(".npz", "")
             h5_fname = npz_path.replace(".npz", "")
+            if args.noiseless:
+                h5_fname = npz_path.replace(".noiseless.npz", "")
             data = h5py_File(h5_fname, "r")
 
             xtal_scale_truth = data["spot_scale"][()]
@@ -713,23 +715,25 @@ class GlobalData:
             assert len(img_in_photons.shape) == 3  # sanity
             nslow, nfast = img_in_photons[0].shape
             bboxes = array(bboxes)
-            for i_bbox, (_, x2, _, y2) in enumerate(bboxes):
-                if x2 == nfast:
-                    bboxes[i_bbox][1] = x2 - 1  # update roi_xmax
-                if y2 == nslow:
-                    bboxes[i_bbox][3] = y2 - 1  # update roi_ymax
+            # OLD WAY: 
+            #for i_bbox, (_, x2, _, y2) in enumerate(bboxes):
+            #    if x2 == nfast:
+            #        bboxes[i_bbox][1] = x2 - 1  # update roi_xmax
+            #    if y2 == nslow:
+            #        bboxes[i_bbox][3] = y2 - 1  # update roi_ymax
+            
             # now cache the roi in nanoBragg format ((x1,x2), (y1,y1))
             # and also cache the pixels and the coordinates
 
             nanoBragg_rois = []  # special nanoBragg format
             xrel, yrel, roi_img = [], [], []
             for i_roi, (x1, x2, y1, y2) in enumerate(bboxes):
-                nanoBragg_rois.append(((x1, x2), (y1, y2)))
-                yr, xr = np_indices((y2 - y1 + 1, x2 - x1 + 1))
+                nanoBragg_rois.append(((x1, x2-1), (y1, y2-1)))
+                yr, xr = np_indices((y2 - y1, x2 - x1))
                 xrel.append(xr)
                 yrel.append(yr)
                 pid = panel_ids[i_roi]
-                roi_img.append(img_in_photons[pid, y1:y2 + 1, x1:x2 + 1])
+                roi_img.append(img_in_photons[pid, y1:y2, x1:x2])
 
             # make sure to clear that damn memory
             img = None
