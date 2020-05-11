@@ -16,6 +16,7 @@ import argparse
 
 parser = argparse.ArgumentParser("make dadat")
 parser.add_argument("--savenoiseless", action="store_true")
+parser.add_argument("--savereadoutless", action="store_true")
 parser.add_argument("--savenpz", action="store_true", help="write image as a npz file (major python version dependent)")
 parser.add_argument("--saveh5", action="store_true", help="write image as an hdf5 file")
 parser.add_argument("--optimizeoversample", action="store_true")
@@ -428,6 +429,30 @@ for i_data in shot_range:
             np.savez(h5name + ".noiseless.npz",
                      img=simsDataSum.astype(np.float64),
                      det=DET.to_dict(), beam=BEAM.to_dict())
+        
+        if args.savereadoutless:
+            readoutless = []
+            for pidx in range(len(DET)):
+                SIM = nanoBragg(detector=DET, beam=BEAM, panel_id=pidx)
+                SIM.beamsize_mm = beamsize_mm
+                SIM.exposure_s = exposure_s
+                SIM.flux = np.sum(data_fluxes)
+                SIM.adc_offset_adu = adc_offset
+                SIM.detector_psf_fwhm_mm = 0
+                SIM.quantum_gain = GAIN
+                SIM.readout_noise_adu = 0
+                SIM.raw_pixels = flex.double(simsDataSum[pidx].ravel())
+                SIM.add_noise()
+                _img = SIM.raw_pixels.as_numpy_array() \
+                    .reshape(simsDataSum[pidx].shape)
+                readoutless.append(_img)
+                SIM.free_all()
+                del SIM
+            
+            np.savez(h5name + ".readoutless.npz",
+                     img=np.array(readoutless,np.float64),
+                     det=DET.to_dict(), beam=BEAM.to_dict())
+        
         for pidx in range(len(DET)):
             SIM = nanoBragg(detector=DET, beam=BEAM, panel_id=pidx)
             SIM.beamsize_mm = beamsize_mm
@@ -446,7 +471,6 @@ for i_data in shot_range:
                 .reshape(simsDataSum[pidx].shape)
             SIM.free_all()
             del SIM
-
 
     if args.write_img:
 

@@ -650,6 +650,10 @@ class GlobalData:
             spectrum = zip(wavelens, fluxes)
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
+                
+                
+            if args.checkbackground:
+                truth_background = data["background"][()]
 
             if args.forcemono:
                 spectrum = [(B.get_wavelength(), sum(fluxes))]
@@ -734,6 +738,10 @@ class GlobalData:
                 yrel.append(yr)
                 pid = panel_ids[i_roi]
                 roi_img.append(img_in_photons[pid, y1:y2, x1:x2])
+                if args.checkbackground:
+                    tx, ty, tz = tilt_abc[i_roi]
+                    tilt_plane = tx*xr + ty*yr + tz
+
 
             # make sure to clear that damn memory
             img = None
