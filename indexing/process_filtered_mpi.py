@@ -37,6 +37,8 @@ args = parser.parse_args()
 
 GAIN = 28
 sigma_readout = 3
+if args.noiseless:
+    sigma_readout = 0
 nmismatch = 0
 nstrong_tot = 0
 nstills_pred = 0
@@ -323,6 +325,8 @@ for i_shot in range(Nexper):
 
         indexed_Hi = []
         selected_ref_idx = []
+        all_reso = []
+        all_fit_sel =[]
         for i_r in range(n_predict):
             ref = refls_predict[i_r]
             mil_idx = [int(hi) for hi in ref["miller_index"]]
@@ -337,7 +341,7 @@ for i_shot in range(Nexper):
             result = tiltnation.integrate_shoebox(ref)
             if result is None:
                 continue
-            shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag = result
+            shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag, fit_sel = result
             if below_zero_flag:
                 print("Tilt plane dips below 0!")
                 continue
@@ -350,6 +354,7 @@ for i_shot in range(Nexper):
             bbox_panel_ids.append(int(ref["panel"]))
             Hi.append(mil_idx)
             did_i_index.append(True)
+            all_fit_sel.append(fit_sel)
             x1, x2, y1, y2 = shoebox_roi
             if x1 == 0 or y1 == 0 or x2 == fs_dim or y2 == ss_dim:
                 boundary_spot.append(True)
@@ -357,11 +362,20 @@ for i_shot in range(Nexper):
                 boundary_spot.append(False)
             indexed_Hi.append(mil_idx)
             selected_ref_idx.append(i_r)
+            reso = 1./np.linalg.norm(ref['rlp'])
+            all_reso.append(reso)
 
         chosen_selection = flex.bool([i in selected_ref_idx for i in range(n_predict)])
         refls_predict = refls_predict.select(chosen_selection)
         spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
         spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0 or < 0, leading to nan snr values..
+       
+        # make a padded numpy array for storing those pixels which were used to fit the background 
+        maxY, maxX = np.max([sel.shape  for sel in all_fit_sel], axis=0)
+        master_fit_sel = np.zeros((len(all_fit_sel), maxY, maxX), bool)
+        for i_sel, sel in enumerate(all_fit_sel):
+            ydim, xdim = sel.shape
+            master_fit_sel[i_sel, :ydim, :xdim] = sell
 
     if args.oldway:
         results = tilt_fit(
@@ -527,12 +541,14 @@ for i_shot in range(Nexper):
     writer.create_dataset("tilt_abc/shot%d" % n_processed, data=tilt_abc,  dtype=np.float32, compression="lzf" )
     writer.create_dataset("tilt_error/shot%d" % n_processed, data=error_in_tilt,  dtype=np.float32, compression="lzf" )
     writer.create_dataset("SNR_Leslie99/shot%d" % n_processed, data=spot_snr, dtype=np.float32, compression="lzf" )
+    writer.create_dataset("resolution/shot%d" % n_processed, data=all_reso, dtype=np.float32, compression="lzf" )
     writer.create_dataset("I_Leslie99/shot%d" % n_processed, data=I_Leslie99, dtype=np.float32, compression="lzf" )
     writer.create_dataset("varI_Leslie99/shot%d" % n_processed, data=varI_Leslie99, dtype=np.float32, compression="lzf" )
     writer.create_dataset("Hi/shot%d" % n_processed, data=Hi, dtype=np.int, compression="lzf")
     writer.create_dataset("indexed_flag/shot%d" % n_processed, data=did_i_index, dtype=np.int, compression="lzf")
     writer.create_dataset("is_on_boundary/shot%d" % n_processed, data=boundary_spot, dtype=np.bool, compression="lzf")
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
+    writer.create_dataset("fit_selection/shot%d" %  n_processed, data=master_fit_sel, dtype=np.bool, compression="lzf")
     # add the default peak selection flags (default is all True, so select all peaks for refinement)
     keepers = np.ones(len(bboxes)).astype(np.bool)
     writer.create_dataset("bboxes/keepers%d" % n_processed, data=keepers, dtype=np.bool, compression="lzf")
