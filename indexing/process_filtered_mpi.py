@@ -375,7 +375,7 @@ for i_shot in range(Nexper):
         master_fit_sel = np.zeros((len(all_fit_sel), maxY, maxX), bool)
         for i_sel, sel in enumerate(all_fit_sel):
             ydim, xdim = sel.shape
-            master_fit_sel[i_sel, :ydim, :xdim] = sell
+            master_fit_sel[i_sel, :ydim, :xdim] = sel
 
     if args.oldway:
         results = tilt_fit(

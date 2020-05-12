@@ -154,6 +154,8 @@ ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
 #In [9]: ave_flux_across_exp
 #Out[9]: 81906698000.75507
 
+# bs7_100kspec.h5: 79955100000.0
+
 
 from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW, WAVELEN_LOW, ENERGY_HIGH, WAVELEN_HIGH
 if args.sad:
@@ -515,6 +517,7 @@ for i_data in shot_range:
             fout.create_dataset("crystalA", data=crystal.get_A())
             fout.create_dataset("crystalU", data=crystal.get_U())
             fout.create_dataset("spectrum", data=data_fluxes)
+            fout.create_dataset("background", data=background*bg_scale)
             fout.create_dataset("wavelengths", data=[ENERGY_CONV/w for w in data_energies])
             fout.create_dataset("mos_doms", data=mos_doms)
             fout.create_dataset("mos_spread", data=mos_spread)

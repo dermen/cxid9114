@@ -30,6 +30,8 @@ if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--readoutless", action="store_true")
+    parser.add_argument("--checkbackground", action="store_true")
+    parser.add_argument("--checkbackgroundsavename",default="_fat_data_background_residual_file", type=str, help="name of the residual background image")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
     parser.add_argument("--tradeps", default=5e-10, type=float, help="traditional convergence epsilon. Convergence happens if |G| < |X|*tradeps where |G| is norm gradient and |X| is norm parameters")
     parser.add_argument("--imagecorr", action="store_true")
@@ -651,9 +653,11 @@ class GlobalData:
             # dont simulate when there are no photons!
             spectrum = [(wave, flux) for wave, flux in spectrum if flux > self.flux_min]
                 
-                
             if args.checkbackground:
-                truth_background = data["background"][()]
+                true_background = data["background"][()]
+                if img_num==0:
+                    self.true_residual = np_zeros(true_background.shape)
+                    self.true_residual_Nsamples = np_zeros(true_background.shape)
 
             if args.forcemono:
                 spectrum = [(B.get_wavelength(), sum(fluxes))]
@@ -737,11 +741,15 @@ class GlobalData:
                 xrel.append(xr)
                 yrel.append(yr)
                 pid = panel_ids[i_roi]
-                roi_img.append(img_in_photons[pid, y1:y2, x1:x2])
+                sY = slice(y1,y2,1)
+                sX = slice(x1,x2,1)
+                roi_img.append(img_in_photons[pid, sY, sX])
                 if args.checkbackground:
+                    pid = panel_ids[i_roi]
                     tx, ty, tz = tilt_abc[i_roi]
                     tilt_plane = tx*xr + ty*yr + tz
-
+                    self.true_residual[pid, sY,sX] = true_background[pid,sY, sX] - tilt_plane
+                    self.true_residual_Nsamples[pid, sY, sX] += 1
 
             # make sure to clear that damn memory
             img = None
@@ -951,20 +959,46 @@ class GlobalData:
             self.Hi_asu_all_ranks = comm.reduce(self.Hi_asu_all_ranks, root=0)
             self.Hi_asu_all_ranks = comm.bcast(self.Hi_asu_all_ranks, root=0)
 
-        # after gather
-        if rank == 0:
-            print("Overall completeness\n<><><><><><><><>")
-            uc = self.all_ucell_mans[0]
+        if rank==0:
             from cctbx.array_family import flex as cctbx_flex
+            uc = self.all_ucell_mans[0]
             params = uc.a, uc.b, uc.c, uc.al*180/np.pi, uc.be*180/np.pi, uc.ga*180/np.pi
+            params = 79.1, 79.1, 38.4, 90,90,90
+            symm = symmetry(unit_cell=params, space_group_symbol=self.symbol)
+            hi_asu_flex = cctbx_flex.miller_index(self.Hi_asu_all_ranks)
+            mset = miller.set(symm, hi_asu_flex, anomalous_flag=True)
+            marr = miller.array(mset)# ,data=flex.double(len(hi_asu_felx),0))
+            n_bin=10
+            binner = marr.setup_binner(d_max=999, d_min=2, n_bins=n_bin)
+            #multi = marr.multiplicities()
+            #from IPython import embed
+            #embed()
+            from collections import Counter
+            print("Average multiplicities:")
+            print("<><><><><><><><><><><><>")
+	    for i_bin in range(n_bin-1):
+		dmax, dmin = binner.bin_d_range(i_bin+1)
+		F_in_bin = marr.resolution_filter(d_max=dmax, d_min=dmin)
+		#multi_data = in_bin.data().as_numpy_array()
+                multi_in_bin = array(list(Counter(F_in_bin.indices()).values()))
+		print "%2.5g-%2.5g : Multiplicity=%.4f" % (dmax, dmin,multi_in_bin.mean()  )
+                for ii in range(1,100,8):
+                    print("\t %d refls with multi %d" % (sum(multi_in_bin==ii), ii))
+                #multi_is_1 += sum([1 for val in d if val==1])
+                #multi_is_2 += sum([1 for val in d if val==2])
+                #multi_is_3 += sum([1 for val in d if val==3])
+            #print("%d,%d,%d miller indices with multiplicity 1,2,3 respectively" % (multi_is_1, multi_is_2, multi_is_3))
+        
+            print("Overall completeness\n<><><><><><><><>")
             symm = symmetry(unit_cell=params, space_group_symbol=self.symbol)
             hi_flex_unique = cctbx_flex.miller_index(list(set(self.Hi_asu_all_ranks)))
             mset = miller.set(symm, hi_flex_unique, anomalous_flag=True)
-            mset.setup_binner(d_min=2, d_max=999, n_bins=10)
+            binner = mset.setup_binner(d_min=2, d_max=999, n_bins=10)
             mset.completeness(use_binning=True).show()
             print("Rank %d: total miller vars=%d" % (rank, len(set(self.Hi_asu_all_ranks))))
 
-
+        if has_mpi:
+            comm.Barrier()
         # this will map the measured miller indices to their index in the LBFGS parameter array self.x
         self.idx_from_asu = {h: i for i, h in enumerate(set(self.Hi_asu_all_ranks))}
         # we will need the inverse map during refinement to update the miller array in diffBragg, so we cache it here
@@ -1311,7 +1345,26 @@ class GlobalData:
         ma = ma.as_amplitude_array()
         return ma
 
-
+    def write_residual_background_image(self):
+        assert args.checkbackground
+        if has_mpi:
+	    self.true_residual = comm.reduce(self.true_residual) 
+	    self.true_residual_Nsamples = comm.reduce(self.true_residual_Nsamples)
+        if rank==0:
+            RES = self.true_residual / self.true_residual_Nsamples
+            from numpy import nan_to_num
+            RES = nan_to_num(RES)
+            from numpy import abs as numpy_abs
+            ABS_RES = numpy_abs(RES)
+            from dxtbx.model.beam import BeamFactory
+            from cxid9114.parameters import WAVELEN_HIGH
+            beam = BeamFactory.simple(WAVELEN_HIGH)
+            np.savez(args.checkbackgroundsavename, img=RES, det=CSPAD.to_dict(), beam=beam.to_dict())
+            np.savez(args.checkbackgroundsavename+ "_abs", img=ABS_RES, det=CSPAD.to_dict(), beam=beam.to_dict())
+            print("Saved background residual image to file %s" % args.checkbackgroundsavename)
+        if has_mpi:
+            comm.Barrier()
+        exit()
 ####pr = cProfile.Profile()
 ####pr.enable()
 
@@ -1337,6 +1390,8 @@ if rank == 0:
     print("INITIAL MIN misset = %f" % np.min(miss))
 if has_mpi:
     comm.Barrier()
+if args.checkbackground:
+    B.write_residual_background_image()
 B.tally_statistics()
 B.init_global_ucell()
 if has_mpi:
