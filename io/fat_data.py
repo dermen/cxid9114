@@ -119,7 +119,7 @@ if rank == 0:
     parser.add_argument("--Fref", type=str, default=None)
     parser.add_argument("--keeperstags", type=str, nargs="+", default=["keepers"], help="names of keepers selection flags")
     parser.add_argument("--plotstats", action="store_true")
-    parser.add_argument("--freezerange", nargs=2,  default=None, type=float, 
+    parser.add_argument("--fcellrange", nargs=2,  default=None, type=float, 
         help="2 args specifying lower and upper resolution bounds, then only miller indices within the bound are refined")
     parser.add_argument("--fcell", nargs="+", default=None, type=int)
     parser.add_argument("--ncells", nargs="+", default=None, type=int)
@@ -496,13 +496,13 @@ class GlobalData:
             #    noiseless_path = npz_path.replace(".npz", ".noiseless.npz")
             #    img_handle = numpy_load(noiseless_path)
 
-            elif args.readoutless:
-                import os
-                #readoutless_path = npz_path.split("tang/")[1]
-                #readoutless_path = os.path.join("/global/project/projectdirs/lcls/dermen/d9114_sims/bear",
-                #                                readoutless_path)
-                readoutless_path = npz_path.replace("tang", "bear")
-                img_handle = numpy_load(readoutless_path)
+            #elif args.readoutless:
+            #    import os
+            #    #readoutless_path = npz_path.split("tang/")[1]
+            #    #readoutless_path = os.path.join("/global/project/projectdirs/lcls/dermen/d9114_sims/bear",
+            #    #                                readoutless_path)
+            #    readoutless_path = npz_path.replace("tang", "bear")
+            #    img_handle = numpy_load(readoutless_path)
             else:
                 img_handle = numpy_load(npz_path)
 
@@ -610,6 +610,9 @@ class GlobalData:
             h5_fname = npz_path.replace(".npz", "")
             if args.noiseless:
                 h5_fname = npz_path.replace(".noiseless.npz", "")
+            elif args.readoutless:
+                h5_fname = npz_path.replace(".readoutless.npz", "")
+
             data = h5py_File(h5_fname, "r")
 
             xtal_scale_truth = data["spot_scale"][()]
@@ -969,10 +972,7 @@ class GlobalData:
             mset = miller.set(symm, hi_asu_flex, anomalous_flag=True)
             marr = miller.array(mset)# ,data=flex.double(len(hi_asu_felx),0))
             n_bin=10
-            binner = marr.setup_binner(d_max=999, d_min=2, n_bins=n_bin)
-            #multi = marr.multiplicities()
-            #from IPython import embed
-            #embed()
+            binner = marr.setup_binner(d_max=999, d_min=2.125, n_bins=n_bin)
             from collections import Counter
             print("Average multiplicities:")
             print("<><><><><><><><><><><><>")
@@ -984,32 +984,34 @@ class GlobalData:
 		print "%2.5g-%2.5g : Multiplicity=%.4f" % (dmax, dmin,multi_in_bin.mean()  )
                 for ii in range(1,100,8):
                     print("\t %d refls with multi %d" % (sum(multi_in_bin==ii), ii))
-                #multi_is_1 += sum([1 for val in d if val==1])
-                #multi_is_2 += sum([1 for val in d if val==2])
-                #multi_is_3 += sum([1 for val in d if val==3])
-            #print("%d,%d,%d miller indices with multiplicity 1,2,3 respectively" % (multi_is_1, multi_is_2, multi_is_3))
         
             print("Overall completeness\n<><><><><><><><>")
             symm = symmetry(unit_cell=params, space_group_symbol=self.symbol)
             hi_flex_unique = cctbx_flex.miller_index(list(set(self.Hi_asu_all_ranks)))
             mset = miller.set(symm, hi_flex_unique, anomalous_flag=True)
-            binner = mset.setup_binner(d_min=2, d_max=999, n_bins=10)
+            binner = mset.setup_binner(d_min=2.125, d_max=999, n_bins=10)
             mset.completeness(use_binning=True).show()
+            marr_unique_h = miller.array(mset)# ,data=flex.double(len(hi_asu_felx),0))
             print("Rank %d: total miller vars=%d" % (rank, len(set(self.Hi_asu_all_ranks))))
+        if rank > 0:
+            marr_unique_h = None
 
         if has_mpi:
-            comm.Barrier()
+            marr_unique_h = comm.bcast(marr_unique_h)
+
         # this will map the measured miller indices to their index in the LBFGS parameter array self.x
         self.idx_from_asu = {h: i for i, h in enumerate(set(self.Hi_asu_all_ranks))}
         # we will need the inverse map during refinement to update the miller array in diffBragg, so we cache it here
         self.asu_from_idx = {i: h for i, h in enumerate(set(self.Hi_asu_all_ranks))}
 
+        fres = marr_unique_h.d_spacings()
+        self.res_from_asu = {h:res for h,res in zip(fres.indices(), fres.data())}
         # will we only refine a range of miller indices ? 
         self.freeze_idx = None
-        if args.freezerange is not None:
+        if args.fcellrange is not None:
             self.freeze_idx = {}
-            resmin, resmax = args.freezerange
-            for h in idx_from_asu:
+            resmax, resmin = args.fcellrange
+            for h in self.idx_from_asu:
                 res = self.res_from_asu[h]
                 if res >= resmin  and res < resmax:
                     self.freeze_idx[h] = False
@@ -1142,7 +1144,7 @@ class GlobalData:
         #TODO optional properties.. make this obvious
         self.RUC.FNAMES = self.all_fnames
         self.RUC.PROC_FNAMES = self.all_proc_fnames
-        self.RUC.PROC_IDX = self.all_proc_fnames
+        self.RUC.PROC_IDX = self.all_shot_idx
         self.RUC.BBOX_IDX = self.all_proc_idx
 
         self.RUC.Hi = self.all_Hi
