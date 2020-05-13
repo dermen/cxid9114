@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 
 
 parser = ArgumentParser("Make prediction boxes")
-
+parser.add_argument("--savefitsel", action="store_true")
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
 parser.add_argument("--nocuda", action="store_true")
@@ -28,6 +28,7 @@ parser.add_argument("--usegt", action="store_true")
 parser.add_argument("--show_params", action='store_true')
 parser.add_argument("--forcelambda", type=float, default=None)
 parser.add_argument("--noiseless", action="store_true")
+parser.add_argument("--readoutless", action="store_true")
 parser.add_argument("--imgdirname", type=str, default=None)
 parser.add_argument("--indexdirname", type=str, default=None)
 parser.add_argument("--symbol", default="P43212", type=str)
@@ -39,6 +40,10 @@ GAIN = 28
 sigma_readout = 3
 if args.noiseless:
     sigma_readout = 0
+    GAIN = 1
+if args.readoutless:
+    sigma_readout = 0
+
 nmismatch = 0
 nstrong_tot = 0
 nstills_pred = 0
@@ -101,8 +106,6 @@ indexdirname = args.indexdirname
 if args.indexdirname is None:
     indexdirname = os.path.dirname(args.filteredexpt)
 
-if args.noiseless:
-    GAIN = 1
 
 if not os.path.exists(args.o) and rank == 0:
     os.makedirs(args.o)
@@ -140,6 +143,8 @@ for i_shot in range(Nexper):
     # this is the file containing relevant simulation parameters..
     if args.noiseless:
         h5 = h5py.File(fpath.replace(".noiseless.npz", ""), 'r')
+    elif args.readoutless:
+        h5 = h5py.File(fpath.replace(".readoutless.npz", ""), 'r')
     else:
         h5 = h5py.File(fpath.replace(".npz", ""), 'r')
     # get image pixels
@@ -354,7 +359,8 @@ for i_shot in range(Nexper):
             bbox_panel_ids.append(int(ref["panel"]))
             Hi.append(mil_idx)
             did_i_index.append(True)
-            all_fit_sel.append(fit_sel)
+            if args.savefitsel:
+                all_fit_sel.append(fit_sel)
             x1, x2, y1, y2 = shoebox_roi
             if x1 == 0 or y1 == 0 or x2 == fs_dim or y2 == ss_dim:
                 boundary_spot.append(True)
@@ -371,11 +377,12 @@ for i_shot in range(Nexper):
         spot_snr[np.isnan(spot_snr)] = -999  # sometimes variance is 0 or < 0, leading to nan snr values..
        
         # make a padded numpy array for storing those pixels which were used to fit the background 
-        maxY, maxX = np.max([sel.shape  for sel in all_fit_sel], axis=0)
-        master_fit_sel = np.zeros((len(all_fit_sel), maxY, maxX), bool)
-        for i_sel, sel in enumerate(all_fit_sel):
-            ydim, xdim = sel.shape
-            master_fit_sel[i_sel, :ydim, :xdim] = sel
+        if args.savefitsel:
+            maxY, maxX = np.max([sel.shape  for sel in all_fit_sel], axis=0)
+            master_fit_sel = np.zeros((len(all_fit_sel), maxY, maxX), bool)
+            for i_sel, sel in enumerate(all_fit_sel):
+                ydim, xdim = sel.shape
+                master_fit_sel[i_sel, :ydim, :xdim] = sel
 
     if args.oldway:
         results = tilt_fit(
@@ -399,6 +406,9 @@ for i_shot in range(Nexper):
     if args.noiseless:
         int_refl_path = os.path.join(indexdirname,
                                      "idx-" + os.path.basename(fpath).replace(".h5.noiseless.npz", ".h5.noiseless_integrated.refl"))
+    elif args.readoutless:
+        int_refl_path = os.path.join(indexdirname,
+                                     "idx-" + os.path.basename(fpath).replace(".h5.readoutless.npz", ".h5.readoutless_integrated.refl"))
     else:
         int_refl_path = os.path.join(indexdirname,
                                      "idx-" + os.path.basename(fpath).replace(".h5.npz", ".h5_integrated.refl"))
@@ -548,7 +558,9 @@ for i_shot in range(Nexper):
     writer.create_dataset("indexed_flag/shot%d" % n_processed, data=did_i_index, dtype=np.int, compression="lzf")
     writer.create_dataset("is_on_boundary/shot%d" % n_processed, data=boundary_spot, dtype=np.bool, compression="lzf")
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
-    writer.create_dataset("fit_selection/shot%d" %  n_processed, data=master_fit_sel, dtype=np.bool, compression="lzf")
+    if args.savefitsel: 
+        writer.create_dataset("fit_selection/shot%d" %  n_processed, data=master_fit_sel, dtype=np.bool, compression="lzf")
+    
     # add the default peak selection flags (default is all True, so select all peaks for refinement)
     keepers = np.ones(len(bboxes)).astype(np.bool)
     writer.create_dataset("bboxes/keepers%d" % n_processed, data=keepers, dtype=np.bool, compression="lzf")
