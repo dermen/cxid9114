@@ -31,12 +31,14 @@ if rank == 0:
     parser.add_argument("--reslow", type=float, default=3.5, help="low res limit for selecting bboxes")
     parser.add_argument("--tiltfilt", default=None, type=float, help="minimum rms for the tilt plane fit")
     parser.add_argument("--tilterrmax", default=None, type=float, help="minimum bg plane parameter variance")
+    parser.add_argument("--tilterrperc", default=None, type=float, help="if shoebox has error above this percentile, it is filtred")
     parser.add_argument("--onboundary", action="store_true", help="include spots that are close to the panel boundary")
     parser.add_argument("--notindexed", action="store_true", help="include spots that were flagged as not indexed")
     parser.add_argument("--snrmin", type=float, default=None, help="minimum SNR for selecting bboxes")
     parser.add_argument("--gain", type=float, default=28)
     parser.add_argument("--glob", type=str, required=True, help="glob for selecting files (output files of process_mpi")
     parser.add_argument("--keeperstag", type=str, default="keepers", help="name of keepers boolean array")
+    parser.add_argument("--keeperstride", type=int, default=None)
     args = parser.parse_args()
     print(args)
 
@@ -204,6 +206,11 @@ def main():
             if args.tilterrmax is not None:
                 tilt_err = h["tilt_error"]["shot%d" % shot_idx][()]
                 is_a_keeper = [k and err <= args.tilterrmax for k, err in zip(is_a_keeper, tilt_err)]
+            elif args.tilterrperc is not None:
+                assert 0 < args.tilterrperc < 100
+                tilt_err = h["tilt_error"]["shot%d" % shot_idx][()]
+                val = percentile(tilt_err, args.tilterrperc)
+                is_a_keeper = [k and err < val for k, err in zip(is_a_keeper, tilt_err)]
         else:
             if rank == 0:
                 print ("WARNING: tilt_error not in hdf5 file")
@@ -224,6 +231,14 @@ def main():
         else:
             if rank == 0:
                 print ("WARNING: is_on_boundary not in hdf5 file")
+
+        if args.keeperstride is not None:
+            from numpy import where
+            where_kept = where(is_a_keeper)[0]
+            keeper_pos = where_kept[::args.keeperstride]
+            for w in where_kept:
+                if w not in keeper_pos:
+                    is_a_keeper[w] = False 
 
         if rank == 0:
             print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
