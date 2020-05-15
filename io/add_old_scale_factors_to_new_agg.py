@@ -32,31 +32,44 @@ old_proc_path = {f:h5py.File(f,'r')['h5_path'] for f in df.proc_fnames.unique()}
 
 img_basenames = []
 scale_data = {}
+ncells_data = {}
 Amat_data = {}
-stuff = ['proc_fnames', 'proc_shot_idx', "log_scales", "Amats"]
-for old_fname, old_idx, log_scale, A in df[stuff].values:
+stuff = ['proc_fnames', 'proc_shot_idx', "spot_scales", "Amats", "ncells"]
+for old_fname, old_idx, scale, A, ncell in df[stuff].values:
     img_path = old_proc_path[old_fname][old_idx]
     img_basename = get_basename(img_path)
-    scale_data[img_basename] = log_scale
+    scale_data[img_basename] = scale
     Amat_data[img_basename] = A
+    ncells_data[img_basename] = ncell
     
 for proc_fname in new_proc_fnames:
     h5 = h5py.File(proc_fname, 'r+')
     basenames = [get_basename(img_path) for img_path in h5["h5_path"][()]]
     
-    log_scales, Amats = [], []
+    scales, Amats, ncells = [], [], []
     for basename in basenames:
-        log_scales.append(scale_data[basename])
+        scales.append(scale_data[basename])
         Amats.append( Amat_data[basename])
+        ncells.append( ncells_data[basename])
     
+    # add the optimized Amats
     k = "Amatrices_%s" % args.preopttag
     if k in h5:
         del  h5[k]
     h5.create_dataset(k, data=Amats)
-    k = "crystal_scale_%s" % args.preopttag
+    
+    # add the optimized scales
+    k = "spot_scale_%s" % args.preopttag
     if k in h5:
         del h5[k]
-    h5.create_dataset(k, data=log_scales)
+    h5.create_dataset(k, data=scales)
+    
+    # add the optimized ncells values
+    k = "ncells_%s" % args.preopttag
+    if k in h5:
+        del h5[k]
+    h5.create_dataset(k, data=ncells)
+
     h5.close()
-    print proc_fname 
+    print( proc_fname )
 

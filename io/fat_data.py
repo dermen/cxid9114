@@ -53,6 +53,7 @@ if rank == 0:
     parser.add_argument("--imgdirname", type=str, default=None)
     parser.add_argument("--rotscale", default=1, type=float)
     parser.add_argument("--noiseless", action="store_true")
+    parser.add_argument("--forcecurva", action="store_true")
     parser.add_argument("--optoutname", type=str, default="results")
     parser.add_argument("--stride", type=int, default=10, help='plot stride')
     parser.add_argument("--minmulti", type=int, default=2, help='minimum multiplicity for refinement')
@@ -1094,7 +1095,8 @@ class GlobalData:
         # plot things
         self.RUC.sigma_r = 3./args.gainval
         self.RUC.gradient_only=args.gradientonly
-        self.RUC.stpmax = args.stpmax
+        self.RUC.fix_params_with_negative_curvature = args.forcecurva
+        #self.RUC.stpmax = args.stpmax
         self.RUC.debug = args.debug
         self.RUC.binner_dmax = 999
         self.RUC.binner_dmin = 2.1
@@ -1104,7 +1106,7 @@ class GlobalData:
         self.RUC.print_all_corr = False
         self.RUC.Fref = self.Fhkl_ref
         self.RUC.merge_stat_frequency=3
-        self.RUC.min_multiplicity=2
+        self.RUC.min_multiplicity=args.minmulti
         self.RUC.print_resolution_bins=True
         self.RUC.refine_rotZ = not args.fixrotZ
         self.RUC.plot_images = args.plot
@@ -1129,7 +1131,7 @@ class GlobalData:
         self.RUC.refine_detdist = False
         self.RUC.S.D.update_oversample_during_refinement = False
         self.RUC.refine_gain_fac = False
-        self.RUC.use_curvatures = False # args.curvatures
+        self.RUC.use_curvatures = args.forcecurva
         self.RUC.use_curvatures_threshold = args.numposcurvatures
         if not args.curvatures:
             self.RUC.S.D.compute_curvatures=False
@@ -1156,7 +1158,7 @@ class GlobalData:
 
     def refine(self, selection_flags=None):
         self.RUC.num_positive_curvatures = 0
-        self.RUC.use_curvatures = False
+        self.RUC.use_curvatures = args.forcecurva
         self.RUC.hit_break_to_use_curvatures = False
         self.RUC.selection_flags = selection_flags
         
@@ -1187,6 +1189,7 @@ class GlobalData:
         else:
             self.RUC.run(setup=False)
             if self.RUC.hit_break_to_use_curvatures:
+                self.RUC.fix_params_with_negative_curvature = False
                 self.RUC.num_positive_curvatures = 0
                 self.RUC.use_curvatures = True
                 self.RUC.run(setup=False)
