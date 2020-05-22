@@ -138,6 +138,8 @@ def main():
     my_unique_fids = set([fidx for fidx, _ in my_shots])
     my_open_files = {fidx: h5py_File(fnames[fidx], "r") for fidx in my_unique_fids}
 
+    all_num_kept =0 
+    all_num_below = 0 
     Ntot = 0
     all_kept_bbox = []
     all_is_kept_flags = []
@@ -157,6 +159,13 @@ def main():
         hi, ki, li = h["Hi"]["shot%d" % shot_idx][()].T
         nspots = len(bboxes)
 
+        if "below_zero" in list(h.keys()):
+            # tilt dips below zero
+            below_zero = h["below_zero"]["shot%d" % shot_idx][()]
+        else:
+            below_zero is None
+                
+
         # use the known cell to compute the resolution of the spots
         #FIXME get the hard coded unit cell outta here!
         
@@ -168,7 +177,6 @@ def main():
             else:
                 # TODO: why does 0,0,0 ever appear as a reflection ? Should never happen...
                 reso = 1 / sqrt((hi ** 2 + ki ** 2) / 79.1 / 79.1 + li ** 2 / 38.4 / 38.4)
-        
         
         in_reso_ring = array([resmin <= d < resmax for d in reso])
 
@@ -240,8 +248,13 @@ def main():
                 if w not in keeper_pos:
                     is_a_keeper[w] = False 
 
+        nkept = np_sum(is_a_keeper)
         if rank == 0:
-            print("Keeping %d out of %d spots" % (sum(is_a_keeper), nspots))
+            print("Keeping %d out of %d spots" % (nkept, nspots))
+        if below_zero is not None:
+            num_below = np_sum( below_zero[is_a_keeper] )
+            all_num_below += num_below
+            all_num_kept += nkept 
 
         if rank == 0 and args.plot is not None:
             for pid in set(panel_ids):
@@ -280,6 +293,10 @@ def main():
     all_kept_bbox = MPI.COMM_WORLD.gather(all_kept_bbox, root=0)
     all_is_kept_flags = MPI.COMM_WORLD.gather(all_is_kept_flags, root=0)
 
+    all_kept = comm.reduce(all_num_kept)
+    all_below = comm.reduce(all_num_below)
+    if rank==0:
+        print("TOTAL BBOXES KEPT = %d; TOTAL BBOXES BELOW ZERO=%d" % (all_kept, all_below) )
     if rank == 0:
         all_kept_bbox = [bbox for bbox_lst in all_kept_bbox for bbox in bbox_lst]
         Ntot_pix = sum([(j2 - j1) * (i2 - i1) for i1, i2, j1, j2 in all_kept_bbox])
