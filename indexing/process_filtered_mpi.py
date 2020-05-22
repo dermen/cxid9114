@@ -5,6 +5,7 @@ from argparse import ArgumentParser
 
 parser = ArgumentParser("Make prediction boxes")
 parser.add_argument("--savefitsel", action="store_true")
+parser.add_argument("--keepbelowzero", action="store_true")
 parser.add_argument("--ngpu", type=int, default=1)
 parser.add_argument("--pearl", action="store_true")
 parser.add_argument("--nocuda", action="store_true")
@@ -332,6 +333,7 @@ for i_shot in range(Nexper):
         selected_ref_idx = []
         all_reso = []
         all_fit_sel =[]
+        all_below_zero = []
         for i_r in range(n_predict):
             ref = refls_predict[i_r]
             mil_idx = [int(hi) for hi in ref["miller_index"]]
@@ -347,10 +349,11 @@ for i_shot in range(Nexper):
             if result is None:
                 continue
             shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag, fit_sel = result
-            if below_zero_flag:
+            if below_zero_flag and not args.keepbelowzero:
                 print("Tilt plane dips below 0!")
                 continue
-            
+            else:
+                all_below_zero.append(below_zero_flag) 
             bboxes.append(shoebox_roi)
             tilt_abc.append(coefs)
             error_in_tilt.append(np.diag(variance_matrix).sum() )
@@ -558,6 +561,8 @@ for i_shot in range(Nexper):
     writer.create_dataset("indexed_flag/shot%d" % n_processed, data=did_i_index, dtype=np.int, compression="lzf")
     writer.create_dataset("is_on_boundary/shot%d" % n_processed, data=boundary_spot, dtype=np.bool, compression="lzf")
     writer.create_dataset("panel_ids/shot%d" % n_processed, data=bbox_panel_ids, dtype=np.int, compression="lzf")
+    if args.keepbelowzero:
+        writer.create_dataset("below_zero/shot%d" % n_processed, data=all_below_zero, dtype=np.bool, compression="lzf")
     if args.savefitsel: 
         writer.create_dataset("fit_selection/shot%d" %  n_processed, data=master_fit_sel, dtype=np.bool, compression="lzf")
     

@@ -78,6 +78,7 @@ if rank == 0:
     parser.add_argument("--usepreoptscale", action="store_true")
     parser.add_argument("--usepreoptncells", action="store_true")
     parser.add_argument("--usepreoptbg", action="store_true")
+    parser.add_argument("--noprintresbins", action="store_true")
 
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
@@ -445,6 +446,8 @@ class GlobalData:
 
         # Nshots_tot = comm.bcast( Nshots_tot, root=0)
         if has_mpi:
+            if rank==0:
+                np.save("shots_for_rank", shots_for_rank)
             shots_for_rank = comm.bcast(shots_for_rank, root=0)
         # h5s = comm.bcast( h5s, root=0)  # pull in the open hdf5 files
 
@@ -855,7 +858,13 @@ class GlobalData:
         self.n_images = n_images
         n_spot_per_image = [len(self.all_spot_roi[i_image]) for i_image in range(n_images)]
         n_spot_tot = sum(n_spot_per_image)
-        total_pix = self.all_pix
+        total_pix = 0
+        for i_image in range(n_images):
+            nspot = n_spot_per_image[i_image]
+            for x1,x2,y1,y2 in self.all_spot_roi[i_image]:
+                total_pix += (x2-x1)*(y2-y1)
+
+        #total_pix = self.all_pix
         # Per image we have 3 rotation angles to refine
         n_rot_param = 3
 
@@ -901,6 +910,7 @@ class GlobalData:
             n_images = comm.reduce(n_images, MPI.SUM, root=0)
             n_spot_tot = comm.reduce(n_spot_tot, MPI.SUM, root=0)
             total_pix = comm.reduce(total_pix, MPI.SUM, root=0)
+            mem = comm.reduce(mem,MPI.SUM, root=0)
 
         # Gather so that each rank knows exactly how many local unknowns are on the other ranks
         if has_mpi:
@@ -923,16 +933,16 @@ class GlobalData:
         self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
 
         # also report total memory usage
-        mem_tot = mem
-        if has_mpi:
-            mem_tot = comm.reduce(mem_tot, MPI.SUM, root=0)
+        #mem_tot = mem
+        #if has_mpi:
+        #    mem_tot = comm.reduce(mem_tot, MPI.SUM, root=0)
 
         if has_mpi:
             comm.Barrier()
         if rank == 0:
             print("\n<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>")
             print("MPIWORLD TOTALZ: images=%d, spots=%d, pixels=%2.2g, Nlocal/Nglboal=%d/%d, usage=%2.2g GigaBytes"
-                  % (n_images, n_spot_tot, total_pix, total_local_unknowns,self.n_global_params, mem_tot))
+                  % (n_images, n_spot_tot, total_pix, total_local_unknowns,self.n_global_params, mem))
             print("Total time elapsed= %.4f seconds" % (time.time()-self.time_load_start))
             print("<><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>\n")
 
@@ -1107,7 +1117,7 @@ class GlobalData:
         self.RUC.Fref = self.Fhkl_ref
         self.RUC.merge_stat_frequency=3
         self.RUC.min_multiplicity=args.minmulti
-        self.RUC.print_resolution_bins=True
+        self.RUC.print_resolution_bins= not args.noprintresbins
         self.RUC.refine_rotZ = not args.fixrotZ
         self.RUC.plot_images = args.plot
         self.RUC.plot_fcell = args.plotfcell
