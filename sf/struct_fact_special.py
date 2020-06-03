@@ -110,22 +110,25 @@ def sfgen(wavelen_A, pdb_name, algo='fft', dmin=1.5, ano_flag=True, yb_scatter_n
     return fcalc.f_calc()
 
 
-def main():
+def write_multichannel_sfall(en_chans=None, output_name = None, pdb_name=None):
     import os
     sf_path = os.path.dirname(__file__)
-    spec_file = os.path.join(sf_path, "../spec/realspec.h5")
-    h5 = h5py.File(spec_file, "r")
-    assert ("energy_bins" in h5.keys())
-    en_chans = h5["energy_bins"][()]  # energy channels from spectrometer
+    if en_chans is None:
+        spec_file = os.path.join(sf_path, "../spec/realspec.h5")
+        h5 = h5py.File(spec_file, "r")
+        assert ("energy_bins" in h5.keys())
+        en_chans = h5["energy_bins"][()]  # energy channels from spectrometer
 
-    output_name = os.path.join(sf_path, "realspec_sfall.h5")  # output file name
-    pdb_name = os.path.join(sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
+    if output_name is None:
+        output_name = os.path.join(sf_path, "realspec_sfall.h5")  # output file name
+    if pdb_name is None:
+        pdb_name = os.path.join(sf_path, '003_s0_mark0_001.pdb')  # refined pdb from sad data
     yb_scatter_name = os.path.join(sf_path, "scanned_fp_fdp.tsv")  # high res fdp scan and corresponding calculated fp
 
     Fout = []
     indices_prev = None  # for sanity check on miller arrays
     for i_en, en in enumerate(en_chans):
-        if i_en % 10 == 0:
+        if i_en % 2 == 0:
             print ("Computing sf for energy channel %d / %d " % (i_en, len(en_chans)))
         wave = ENERGY_CONV / en
         F = sfgen(wave,
@@ -155,8 +158,8 @@ def main():
 
 def load_sfall(fname):
     """
-    special script for loading the structure factor file generated in main()
-    :param fname: file generated in the main method above.. 
+    special script for loading the structure factor file generated in write_multichannel_sfall()
+    :param fname: file generated in the write_multichannel_sfall method above.. 
     :return: mil_ar, energies
         mil_ar: dict of miller arrays (complex) 
         energies: array of xray energies in electron volts
@@ -165,14 +168,18 @@ def load_sfall(fname):
 
     f = h5py.File(fname, "r")
     data = f["data"][()]
-    indices = f["indices"][()]
+    indices_data = f["indices"][()]
+    indices_for_flex = []  # make a list for flex constructor
+    for hkl in indices_data:
+        h,k,l = map(int, hkl)  # cast to python int for Python 3
+        indices_for_flex.append( (h,k,l))
     hall = f["hall_symbol"][()]
     ucell_param = tuple(f["ucell_tuple"][()])
     energies = f["energies"][()]
     sg = sgtbx.space_group(hall)
     Symm = crystal.symmetry(unit_cell=ucell_param, space_group=sg)
-    indices_flex = tuple(map(tuple, indices))
-    mil_idx = flex.miller_index(indices_flex)
+    #indices_flex = tuple(map(tuple, indices))
+    mil_idx = flex.miller_index(indices_for_flex)
     mil_set = miller.set(crystal_symmetry=Symm, indices=mil_idx, anomalous_flag=True)
 
     mil_ar = {}  # load a dict of "sfall at each energy"
@@ -344,6 +351,6 @@ def make_miller_file(F,SIGF,mil_idx,mtz_name="out.mtz",
     print("Wrote file")
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__write_multichannel_sfall__":
+    write_multichannel_sfall()
     #out = karle_hendrickson_unknowns()

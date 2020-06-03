@@ -27,6 +27,8 @@ parser.add_argument("-o", dest='ofile', type=str, help="file out")
 parser.add_argument("-odir", dest='odir', type=str, help="file outdir", default="_sims64res")
 parser.add_argument("--seed", type=int, dest='seed', default=None, help='random seed for orientation')
 parser.add_argument("--sad", action="store_true")
+parser.add_argument("--mad", action="store_true")
+parser.add_argument("--minflux", type=float, default=5e8)
 parser.add_argument("--renormflux", action="store_true")
 parser.add_argument('--spectrafile', type=str, default=None, help="path to a spectrum file created with spec/make_spec.py")
 parser.add_argument("--gpu", dest='gpu', action='store_true', help='sim with GPU')
@@ -84,10 +86,15 @@ ngpu_per_node = args.ngpu_per_node
 ofile = args.ofile
 div_tup = (0, 0, 0)  # (0.13, .13, 0.06)  # horiz, verti, stpsz (mrads)
 
+if args.mad:
+    assert not args.sad
+if args.sad:
+    assert not args.mad
+
 kernels_per_gpu = args.kernelspergpu
 smi_stride = 5
 GAIN = 28
-min_flux = 5e8
+min_flux = args.minflux
 beam_diam_mm = 1. * 1e-3
 exposure_s = 1
 mos_spread = args.mos_spread_deg
@@ -156,7 +163,6 @@ ave_flux_across_exp = np.mean(data_fluxes_all, axis=0).sum()
 
 # bs7_100kspec.h5: 79955100000.0
 
-
 from cxid9114.parameters import ENERGY_CONV, ENERGY_LOW, WAVELEN_LOW, ENERGY_HIGH, WAVELEN_HIGH
 if args.sad:
     print("Rank %d: Loading 4bs7 structure factors!" % rank)
@@ -171,7 +177,6 @@ if args.sad:
     else:
         data_sf = struct_fact_special.load_4bs7_sf()
     data_sf = [data_sf]
-    
 
 if args.sad:
     if args.p9:
@@ -184,8 +189,12 @@ if args.sad:
         data_energies = np.array([ENERGY_LOW])
         BEAM.set_wavelength(WAVELEN_LOW)
 
-beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
+if args.mad:
+    data_sf_dict, _ = struct_fact_special.load_sfall("../mad/d9114_mad_sfall.hdf5")
+    num_en = len(data_sf_dict)
+    data_sf = [data_sf_dict[i_chan].as_amplitude_array() for i_chan in range(num_en)]
 
+beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
 
 data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
 a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
@@ -214,13 +223,15 @@ shot_range = range(start, stop)
     #if not args.overwrite:
     #    raise NotImplementedError("If writing master hdf5, must work in overwrite mode")
 
+
 for i_data in shot_range:
+    print(i_data, shot_range)
     flux_id = data_fluxes_idx[i_data]
     h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, rank, i_data, flux_id)
     h5name = os.path.join(odirj, h5name)
     if os.path.exists(h5name) and not args.overwrite:
-        #print("Rank %d: skipping- image %s already exists!" \
-        #      % (rank, h5name))
+        print("Rank %d: skipping- image %s already exists!" \
+              % (rank, h5name))
         continue
 
     #device_Id = flux_id % ngpu_per_node
@@ -239,6 +250,15 @@ for i_data in shot_range:
         print("CPU memory usage")
         mem_usg = """ps -U dermen --no-headers -o rss | awk '{ sum+=$1} END {print int(sum/1024) "MB consumed by CPU user"}'"""
         os.system(mem_usg)
+
+    if args.mad:
+        data_fluxes = data_fluxes_all[flux_id]
+        data_fluxes[data_fluxes < min_flux] = 0
+        data_fluxes /= data_fluxes.sum()
+        data_fluxes *= 8e10 
+            
+        data_energies = ENERGY_CONV/data_wavelengths_all[flux_id]
+        BEAM.set_wavelength(float(data_wave_ebeams_all[flux_id]))
 
     if args.sad:
         if args.bs7real:
@@ -494,12 +514,13 @@ for i_data in shot_range:
                      img=data_array,
                      det=DET.to_dict(), beam=BEAM.to_dict())
         if args.saveh5:
-            from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter
+            from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter, add_spectra_to_file
             #img_h5name = "%s_rank%d_data%d_fluence%d.img.h5" % (ofile, rank, i_data, flux_id)
             #img_h5name = os.path.join(odirj, img_h5name)
             with H5AttributeGeomWriter(filename=h5name, image_shape=data_array.shape, num_images=1, 
                             detector=DET, beam=BEAM, dtype=np.float64) as WRITER:
                 WRITER.add_image(data_array)
+            add_spectra_to_file( h5name, energies=[data_energies], weights=[data_fluxes])
 
         # save the shots simulation parameter data
         open_flag = "w"
