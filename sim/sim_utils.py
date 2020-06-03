@@ -373,6 +373,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                                master_scale=master_scale,
                                amorphous_sample_thick_mm=amorphous_sample_thick_mm,
                                printout_pix=printout_pix)
+        if roi_pp is not None:
+            assert( counts_pp is not None)
         
         if not only_water:
             PattF.adjust_mosaicity(mos_dom, mos_spread)
