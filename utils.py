@@ -106,24 +106,23 @@ def datablock_from_numpyarrays(image, detector, beam, mask=None):
 
 def open_flex(filename):
     """unpickle the flex file which requires flex import"""
-    with open(filename, "r") as f:
-        if six.PY3:
-            try:
-                from IPython import embed
-                embed()
-                data = cPickle.load(f.name)
-            except AttributeError:
-                data = cPickle.load(f)
-        else:
+    try:
+        with open(filename, "r") as f:
+            data = cPickle.load(f)
+    except UnicodeDecodeError:
+        with open(filename, "rb") as f:
             data = cPickle.load(f)
     return data
 
 
 def save_flex(data, filename):
     """save pickle"""
-    with open(filename, "w") as f:
-        cPickle.dump(data, f)
-
+    try:
+        with open(filename, "w") as f:
+            cPickle.dump(data, f)
+    except TypeError:
+        with open(filename, "wb") as f:
+            cPickle.dump(data, f)
 
 
 def smooth(x, beta=10.0, window_size=11):
