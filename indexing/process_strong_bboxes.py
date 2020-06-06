@@ -96,12 +96,11 @@ if not os.path.exists(args.o) and rank == 0:
 
 MPI.COMM_WORLD.Barrier()
 
-# load the bs7 default array
 all_paths = []
 all_Amats = []
 odir = args.o
 
-writer = h5py.File(os.path.join(odir, "strong_process_rank%d.h5" % rank), "w")
+#writer = h5py.File(os.path.join(odir, "strong_process_rank%d.h5" % rank), "w")
 
 ### LOAD ALL POSSIBLE MASTER FILE PATHS
 import dxtbx
@@ -117,7 +116,7 @@ for i_e, Exper in enumerate(El):
 shot_data = []
 n_processed = 0
 for i_shot in range(Nexper):
-    
+   
     if i_shot % size != rank:
         continue
     if rank==0:
@@ -145,18 +144,17 @@ for i_shot in range(Nexper):
     # <><><><><><><><><><><><><><
     # HERE WE WILL DO PREDICTIONS
     # <><><><><><><><><><><><><><
-    # make a sad spectrum
-    # loading the beam  (this might have wrong energy)
     energies = BEAM.get_spectrum_energies().as_numpy_array()
 
+    # bin the spectrum
     nbins = 100
     energy_bins = np.linspace(energies.min()-1e-6, energies.max()+1e-6, nbins+1) 
     fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
     energies = .5*(energy_bins[:-1] + energy_bins[1:]) 
-    
+   
+    # only simulate if significantly above the baselein (TODO make more accurate)
     cutoff = np.median(fluences) * 0.8
     is_finite = fluences > cutoff
-    
     fluences = fluences[is_finite]
     fluences /= fluences.sum()
     fluences *= total_flux
@@ -172,7 +170,7 @@ for i_shot in range(Nexper):
     #energies = [(energies*fluences).sum() / fluences.sum()]
     #fluences = [total_flux]
 
-    # grab the detector
+    # grab the detector datas
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
     fs_dim, ss_dim = DET[0].get_image_size()
@@ -180,13 +178,10 @@ for i_shot in range(Nexper):
     # grab the crystal
     crystal = Exper.crystal
 
-    # make the miller array to be used with prediction
+    # make the miller array to be used for prediction
     sgi = sgtbx.space_group_info(args.symbol)
-    # TODO: allow override of ucell
     symm = symmetry(unit_cell=crystal.get_unit_cell(), space_group_info=sgi)
     miller_set = symm.build_miller_set(anomalous_flag=True, d_min=1.5, d_max=999)
-    # NOTE does build_miller_set automatically expand to p1 ? Does it obey systematic absences ?
-    # Note how to handle sys absences here ?
     Famp = flex.double(np.ones(len(miller_set.indices())) * args.defaultF)
     mil_ar = miller.array(miller_set=miller_set, data=Famp).set_observation_type_xray_amplitude()
     FF = [mil_ar] + [None]*(len(energies)-1)
@@ -233,11 +228,11 @@ for i_shot in range(Nexper):
         energies, fluences, pids=panels_with_spots, 
         profile=profile, cuda=not args.nocuda, oversample=1,
         Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
-        master_scale=1, recenter=True,time_panels=True,
+        master_scale=1, recenter=True,time_panels=False,
         roi_pp=rois_perpanel, counts_pp=counts_perpanel,
         exposure_s=exposure_s, beamsize_mm=beamsize_mm, device_Id=device_Id,
         show_params=args.show_params, accumulate=True, crystal_size_mm=xtal_size)
-    t2 = time.time()
+    tsim = time.time()-t
 
     datas, sims, i_refs, cents, cents_mm  = [],[],[],[],[]
     for pid in range(len(DET)):
@@ -267,12 +262,12 @@ for i_shot in range(Nexper):
             datas.append(roi_data)
             sims.append(roi_sim)
             i_ref  = refl_ids[panel_key][i_roi]
-            #exper_strong_refls[i_ref]["xyzcal.px"] = centroid+(0,)
-            #exper_strong_refls[i_ref]["xyzcal.mm"] = centroid_mm+(0,)
             i_refs.append(i_ref)
 
     shot_data += list(zip([i_shot]*len(cents), cents , cents_mm, i_refs ) )
-    print("Rank %d: shot %d has %d refls" % (rank, i_shot, len(i_refs)))
+
+    print("Rank %d: shot %d / %d  has %d refls TOok %f seconds to simulate %d panels " 
+        % (rank, i_shot, Nexper, len(i_refs), tsim, len(panels_with_spots)), flush=True)
 
 
 if has_mpi:
