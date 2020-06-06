@@ -17,6 +17,8 @@ parser.add_argument("--dilate", default=1, type=int, help="factor by which to di
 parser.add_argument("--defaultF", type=float, default=1e3, help="for prediction simulation use this value at every Fhkl")
 parser.add_argument("--thresh", type=float, default=1e-2, help="simulated pixels above this value will be used to form the integration mask")
 parser.add_argument("--o", help='output directoty', type=str, default='.')
+parser.add_argument("--tag", help='output tag', type=str, default='boop')
+parser.add_argument("--Nmax", help='max num exper to process', type=int, default=-1)
 parser.add_argument("--show_params", action='store_true')
 parser.add_argument("--imgdirname", type=str, default=None)
 parser.add_argument("--indexdirname", type=str, default=None)
@@ -50,6 +52,8 @@ from cxid9114.prediction import prediction_utils
 from cxid9114.sf import struct_fact_special
 from cxid9114.parameters import WAVELEN_HIGH
 from tilt_fit.tilt_fit import tilt_fit, TiltPlanes
+import pandas
+import time
 
 n_gpu = args.ngpu
 
@@ -72,8 +76,11 @@ if rank == 0:
         ax = plt.gca()
 
 # Load in the reflection tables and experiment lists
+from dxtbx.model import ExperimentList
 print ("Reading in the files")
 El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
+if args.Nmax is not None:
+    El = El[:args.Nmax]
 Nexper = len(El)
 
 DET = El.detectors()[0] 
@@ -107,6 +114,7 @@ for i_e, Exper in enumerate(El):
     if path not in loaders:
         loaders[path] = dxtbx.load(path)
 
+shot_data = []
 n_processed = 0
 for i_shot in range(Nexper):
     
@@ -141,12 +149,12 @@ for i_shot in range(Nexper):
     # loading the beam  (this might have wrong energy)
     energies = BEAM.get_spectrum_energies().as_numpy_array()
 
-    nbins = 60
+    nbins = 100
     energy_bins = np.linspace(energies.min()-1e-6, energies.max()+1e-6, nbins+1) 
     fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
     energies = .5*(energy_bins[:-1] + energy_bins[1:]) 
     
-    cutoff = np.median(fluences) * 0.5
+    cutoff = np.median(fluences) * 0.8
     is_finite = fluences > cutoff
     
     fluences = fluences[is_finite]
@@ -187,16 +195,22 @@ for i_shot in range(Nexper):
     exper_refls_strong = Rmaster.select(Rmaster['id']==i_shot)
     panel_ids = exper_refls_strong["panel"]
     panels_with_spots = set(panel_ids)
+    alist_panels = list(range(64,72))
+    panels_with_spots = [i for i in panels_with_spots if i in alist_panels]
     rois_perpanel = {}
     panel_keys = {}
     counts_perpanel = {}
+    refl_ids = {}
     for ii, pid in enumerate(panels_with_spots):
         rois_perpanel[ii] = []
+        refl_ids[ii] = []
         counts_perpanel[ii] = np.zeros((sdim, fdim))
         panel_keys[pid] = ii
 
     centroid_x, centroid_y, _ = map(lambda x: np.array(x)-0.5, prediction_utils.xyz_from_refl(exper_refls_strong))
-    for i,j, pid in zip(centroid_x, centroid_y, panel_ids):
+    for i_ref, (i,j, pid) in enumerate(zip(centroid_x, centroid_y, panel_ids)):
+        if pid not in alist_panels:
+            continue
         i1 = int(max(0, i-bb))
         i2 = int(min(fdim, i+bb))
         j1 = int(max(0, j-bb))
@@ -205,6 +219,7 @@ for i_shot in range(Nexper):
         ii = panel_keys[pid]
         rois_perpanel[ii].append(roi)
         counts_perpanel[ii][j1:j2, i1:i2] += 1
+        refl_ids[ii].append(i_ref)
 
     # <><><><><><><><><>
     # DO THE SIMULATION
@@ -212,17 +227,100 @@ for i_shot in range(Nexper):
     # choose a device Id for GPU
     device_Id = np.random.choice(range(n_gpu))
     # call the simulation helper
+    t = time.time()
     simsAB = sim_utils.sim_colors(
         crystal, DET, BEAM, FF,
         energies, fluences, pids=panels_with_spots, 
         profile=profile, cuda=not args.nocuda, oversample=1,
         Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
-        master_scale=1, recenter=True,
+        master_scale=1, recenter=True,time_panels=True,
         roi_pp=rois_perpanel, counts_pp=counts_perpanel,
         exposure_s=exposure_s, beamsize_mm=beamsize_mm, device_Id=device_Id,
         show_params=args.show_params, accumulate=True, crystal_size_mm=xtal_size)
+    t2 = time.time()
 
-    embed()
+    datas, sims, i_refs, cents, cents_mm  = [],[],[],[],[]
+    for pid in range(len(DET)):
+        sim_panel = simsAB[pid]
+        if sim_panel is None:
+            continue
+        panel_key = panel_keys[pid]
+        rois = rois_perpanel[panel_key]
+        for i_roi, ((i1,i2),(j1,j2)) in enumerate(rois):
+            roi_data = img_data[pid][j1:j2, i1:i2]
+            roi_sim = sim_panel[j1:j2, i1:i2]
+            Ivals = roi_sim.ravel()
+            Isum = Ivals.sum()
+            if Isum == 0:
+                continue
+            Y,X = np.indices(roi_sim.shape)
+            yvals = Y.ravel()
+            xvals = X.ravel()
+            xcom = (xvals*Ivals).sum()/Isum
+            ycom = (yvals*Ivals).sum()/Isum
+            xcom = xcom + i1+.5
+            ycom = ycom + j1+.5
+            centroid = xcom, ycom
+            cents.append (centroid)
+            centroid_mm = DET[pid].pixel_to_millimeter(centroid)
+            cents_mm.append(centroid_mm)
+            datas.append(roi_data)
+            sims.append(roi_sim)
+            i_ref  = refl_ids[panel_key][i_roi]
+            #exper_strong_refls[i_ref]["xyzcal.px"] = centroid+(0,)
+            #exper_strong_refls[i_ref]["xyzcal.mm"] = centroid_mm+(0,)
+            i_refs.append(i_ref)
+
+    shot_data += list(zip([i_shot]*len(cents), cents , cents_mm, i_refs ) )
+    print("Rank %d: shot %d has %d refls" % (rank, i_shot, len(i_refs)))
+
+
+if has_mpi:
+    shot_data = comm.reduce(shot_data)
+if rank==0:
+    print("Saving all data")
+    exper_ids, cents, cents_mm, i_refs = zip(*shot_data)
+    El_out = ExperimentList()
+    Rmaster_out = flex.reflection_table()
+    Rmaster_orig = flex.reflection_table()
+    df = pandas.DataFrame({"exper_ids":exper_ids, "cents": cents, "cents_mm": cents_mm, "i_refs": i_refs})
+    unique_exper_ids = df.exper_ids.unique()
+    print("%d unique experiments with %d total reflections" % (len(unique_exper_ids), len(cents) ))
+    from copy import deepcopy
+    for new_exper_id, exper_id in enumerate(unique_exper_ids):
+        exper_id = int(exper_id)
+        df_id = df.query("exper_ids==%d" % exper_id)
+        r = Rmaster.select(Rmaster["id"]==exper_id)
+        r_orig = deepcopy(r)
+        sel = flex.bool([i in df_id.i_refs.values for i in range(len(r))])
+        cents = [val for val in df_id.cents.values]
+        cents_mm = [val for val in df_id.cents_mm.values]
+        for ii, i_ref in enumerate(df_id.i_refs.values):
+            i_ref = int(i_ref)
+            x,y = cents[ii]
+            r["xyzcal.px"][i_ref] = x, y, 0 
+            x,y = cents_mm[ii]
+            r["xyzcal.mm"][i_ref] = x, y, 0 
+        r = r.select(sel)
+        r["id"] = flex.int(len(r), new_exper_id)
+        
+        r_orig = r_orig.select(sel)
+        r_orig["id"] = flex.int(len(r_orig), new_exper_id)
+        Rmaster_out.extend(r)
+        Rmaster_orig.extend(r_orig)
+        El_out.append(El[exper_id])
+    Rmaster_out.as_file("%s.refl" % args.tag)
+    Rmaster_orig.as_file("%s_orig.refl" % args.tag)
+    El_fname = "%s.expt" % args.tag
+    El_fname_orig = "%s_orig.expt" % args.tag
+    El_out.as_json(El_fname)
+    El_out.as_json(El_fname_orig)
+
+    #nref = len(exper_refls_strong)
+    #sel = flex.bool([i in i_refs for i in range(nref)]
+    #r = exper_refls_strong.select(sel)
+    #Rmaster_out.extend(r)
+    #El_out.append(Exper)
 
     ## make the spot integration foreground mask from the predictions
     #panel_integration_masks = {}
