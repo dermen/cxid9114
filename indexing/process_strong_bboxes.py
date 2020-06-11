@@ -5,9 +5,11 @@ from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 
 parser = ArgumentParser("Make strong boxes", formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument("--savefitsel", action="store_true")
+parser.add_argument("--mono", action="store_true")
 parser.add_argument("--keepbelowzero", action="store_true")
 parser.add_argument("--ngpu", type=int, default=1, help="number of GPU machines connected to current host")
 parser.add_argument("--nocuda", action="store_true")
+parser.add_argument("--flat", action="store_true")
 parser.add_argument("--showcompleteness", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--filteredexpt", type=str, required=True, help="filtered combined experiment file")
@@ -77,6 +79,7 @@ if rank == 0:
 
 # Load in the reflection tables and experiment lists
 from dxtbx.model import ExperimentList
+from cxid9114.parameters import ENERGY_CONV
 print ("Reading in the files")
 El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
 if args.Nmax is not None:
@@ -84,6 +87,14 @@ if args.Nmax is not None:
 Nexper = len(El)
 
 DET = El.detectors()[0] 
+if args.flat:
+    det_El = ExperimentListFactory.from_json_file("flat_swiss.expt", check_format=False)
+    DET = det_El.detectors()[0]
+    assert DET[0].get_thickness()==0
+    assert DET[0].get_mu()==0
+else:
+    exit()
+
 Rmaster = flex.reflection_table.from_file(args.filteredexpt.replace(".expt", ".refl"))
 print ("Read in %d experiments" % Nexper)
 # get the original indexing directory name
@@ -133,7 +144,7 @@ for i_shot in range(Nexper):
     img_data = np.array([panel.as_numpy_array() for panel in loaders[filepath].get_raw_data(fidx)])
     sdim, fdim = img_data[0].shape
     # get simulation parameters
-    Ncells_abc = 60, 60, 60 
+    Ncells_abc = 10,10,10 #60, 60, 60 
     profile = "gauss"
     beamsize_mm = 0.001
     exposure_s = 1
@@ -160,15 +171,26 @@ for i_shot in range(Nexper):
     fluences *= total_flux
     energies = energies[is_finite]
 
+    # mono sim
+    if args.mono:
+        ave_en = ENERGY_CONV / BEAM.get_wavelength()
+        #sig = 8
+        #energies = np.linspace(ave_en-50 ,ave_en+50, 100)
+        #I = np.exp( -(ave_en-energies)**2 / 2/sig/sig)
+        #I /= I.sum()
+        #I *= total_flux
+        #fluences = I
+        energies = [ave_en]
+        fluences = [total_flux]
+    else:
+        exit()
+    
     if args.sanityplots:
         ax.clear()
         ax.plot( energies, fluences)
         plt.draw()
         plt.pause(args.pause)
 
-    # mono sim
-    #energies = [(energies*fluences).sum() / fluences.sum()]
-    #fluences = [total_flux]
 
     # grab the detector datas
     detdist = abs(DET[0].get_origin()[-1])
@@ -190,7 +212,8 @@ for i_shot in range(Nexper):
     exper_refls_strong = Rmaster.select(Rmaster['id']==i_shot)
     panel_ids = exper_refls_strong["panel"]
     panels_with_spots = set(panel_ids)
-    alist_panels = list(range(64,72))
+    alist_panels = list(panels_with_spots) 
+    #alist_panels = list(range(64,72))
     panels_with_spots = [i for i in panels_with_spots if i in alist_panels]
     rois_perpanel = {}
     panel_keys = {}
@@ -253,8 +276,8 @@ for i_shot in range(Nexper):
             xvals = X.ravel()
             xcom = (xvals*Ivals).sum()/Isum
             ycom = (yvals*Ivals).sum()/Isum
-            xcom = xcom + i1+.5
-            ycom = ycom + j1+.5
+            xcom = xcom + i1 +.5
+            ycom = ycom + j1 +.5
             centroid = xcom, ycom
             cents.append (centroid)
             centroid_mm = DET[pid].pixel_to_millimeter(centroid)
