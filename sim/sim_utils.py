@@ -436,7 +436,8 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
         if time_panels:
             tsim = time.time() - tstart
             if six.PY3:
-                print("\rPanel %d (%d/%d) took %f sec" % (i_pan,ii+1, len(pids), tsim), end="", flush=True) 
+                print("Panel %d (%d/%d) took %f sec" % (i_pan,ii+1, len(pids), tsim), flush=True) 
+                #print("\rPanel %d (%d/%d) took %f sec" % (i_pan,ii+1, len(pids), tsim), end="", flush=True) 
             else:
                 print("\rPanel %d (%d/%d) took %f sec" % (i_pan,ii+1, len(pids), tsim), end="") 
                 sys.stdout.flush()

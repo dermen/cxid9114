@@ -504,3 +504,19 @@ def aligned_lyso_crystal():
                   'space_group_hall_symbol': '-P 4 2'}
     C = Crystal.from_dict(cryst_descr)
     return C
+
+
+def histogram_cyto_sim(energies, fluences, total_flux=1e12, nbins=100):
+    # bin the spectrum
+    energy_bins = np.linspace(energies.min() - 1e-6, energies.max() + 1e-6, nbins + 1)
+    fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
+    energies = .5 * (energy_bins[:-1] + energy_bins[1:])
+
+    # only simulate if significantly above the baselein (TODO make more accurate)
+    cutoff = np.median(fluences) * 0.8
+    is_finite = fluences > cutoff
+    fluences = fluences[is_finite]
+    fluences /= fluences.sum()
+    fluences *= total_flux
+    energies = energies[is_finite]
+    return energies, fluences
