@@ -27,10 +27,13 @@ parser.add_argument("--indexdirname", type=str, default=None)
 parser.add_argument("--symbol", default="P43212", type=str, help="space group symbol")
 parser.add_argument("--sanityplots", action='store_true', help="whether to display plots for visual verification")
 parser.add_argument("--pause", type=float, default=0.5, help="pause interval in seconds between consecutive plots")
-parser.add_argument("--gain", type=float, default=1, help="value for adu per photon")
-parser.add_argument("--readout", type=float, default=3)
+parser.add_argument("--gain", type=float, default=9.481, help="value for adu per photon")
+parser.add_argument("--readout", type=float, default=13.02)
 parser.add_argument("--maskfile", type=str, default=None, help="path to an hdf5 file with `trusted_pixels` as a dataset name,\n data should be same shape as raw data (Num_panels, slowdim, fastdim), and dtype bool")
 args = parser.parse_args()
+
+#
+# ave_sigma_r = (12.40503397943359+6.359566111586826 + 20.30000889831704)/3. = 13.02
 
 GAIN = args.gain
 sigma_readout = args.readout
@@ -398,8 +401,9 @@ for i_shot in range(Nexper):
         panel_id = exper_refls_strong[i_ref]['panel']
         is_bg_pix[panel_id, j1:j2, i1:i2] = sim < thresh
 
-    out = fit_background_and_snr(exper_refls_strong, img_data, is_bg_pix, Exper, savefitsel=args.savefitsel,
-                                 bad_pix=badpixel_map)
+    out = fit_background_and_snr(exper_refls_strong, img_data, is_bg_pix, Exper,
+                                 GAIN=GAIN, savefitsel=args.savefitsel,
+                                 bad_pix=badpixel_map, sigma_readout=args.readout)
 
     spot_snr, spot_reso, spot_bboxes, indexed_Hi, Hi, selected_ref_idx, bbox_panel_ids, \
         I_Leslie99, varI_Leslie99, did_i_index, tilt_abc, error_in_tilt, \
@@ -435,7 +439,7 @@ for i_shot in range(Nexper):
                               compression="lzf")
 
     # add the default peak selection flags (default is all True, so select all peaks for refinement)
-    keepers = np.ones(len(bboxes)).astype(np.bool)
+    keepers = np.ones(len(spot_bboxes)).astype(np.bool)
     writer.create_dataset("bboxes/keepers%d" % n_processed, data=keepers, dtype=np.bool, compression="lzf")
 
     nref = len(exper_refls_strong)
