@@ -92,8 +92,6 @@ if args.flat:
     DET = det_El.detectors()[0]
     assert DET[0].get_thickness()==0
     assert DET[0].get_mu()==0
-else:
-    exit()
 
 Rmaster = flex.reflection_table.from_file(args.filteredexpt.replace(".expt", ".refl"))
 print ("Read in %d experiments" % Nexper)
@@ -182,8 +180,6 @@ for i_shot in range(Nexper):
         #fluences = I
         energies = [ave_en]
         fluences = [total_flux]
-    else:
-        exit()
     
     if args.sanityplots:
         ax.clear()
