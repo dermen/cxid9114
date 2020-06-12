@@ -20,8 +20,6 @@ parser.add_argument("--dilate", default=1, type=int)
 parser.add_argument("--bgname", type=str, default=None)
 parser.add_argument("--defaultF", type=float, default=1e3)
 parser.add_argument("--sbpad", type=int, default=0, help="padding for background tilt plant fit")
-parser.add_argument("--spline", action="store_true")
-parser.add_argument("--sanitycheck", action="store_true")
 parser.add_argument("--thresh", type=float, default=1e-2)
 parser.add_argument("-o", help='output directoty',  type=str, default='.')
 parser.add_argument("--miller", type=str, default=None, choices=["bs7", "p9", "datasf"])
@@ -570,7 +568,7 @@ for i_shot in range(Nexper):
     keepers = np.ones(len(bboxes)).astype(np.bool)
     writer.create_dataset("bboxes/keepers%d" % n_processed, data=keepers, dtype=np.bool, compression="lzf")
 
-    if rank==0:
+    if rank == 0:
         print("Rank%d: Done writing" % rank)
     n_processed += 1
 

@@ -32,6 +32,7 @@ if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--checkbackground", action="store_true")
+    parser.add_argument("--flat", action="store_true", help="use flat detector")
     parser.add_argument("--checkbackgroundsavename",default="_fat_data_background_residual_file", type=str, help="name of the residual background image")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
     parser.add_argument("--tradeps", default=5e-10, type=float, help="traditional convergence epsilon. Convergence happens if |G| < |X|*tradeps where |G| is norm gradient and |X| is norm parameters")
@@ -187,12 +188,16 @@ if rank == 0:
     ALIST = None
     if args.alist is not None:
         ALIST = list(np.loadtxt(args.alist, str))
-    
+
+    from dxtbx.model.experiment_list import ExperimentListFactory
+    det_El = ExperimentListFactory.from_json_file("../indexing/flat_swiss.expt", check_format=False)
+    FLAT_DET = det_El.detectors()[0]
 
     from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
 
 else:
     ALIST = None
+    FLAT_DET = None
     np_indices = None
     EXP = ARANGE = LOGICAL_OR= LOADTXT = None
     np_log = None
@@ -222,6 +227,7 @@ else:
 if has_mpi:
     if rank == 0:
         print("Broadcasting imports")
+    FLAT_DET = comm.bcast(FLAT_DET)
     ALIST = comm.bcast(ALIST)
     EXP = comm.bcast(EXP)
     LOADTXT = comm.bcast(LOADTXT)
@@ -457,12 +463,17 @@ class GlobalData:
             loader = loaders[master_path]
 
             master_file_index = int(h["master_file_indices"][shot_idx])
-            img =  array([_dat.as_numpy_array() for _dat in loader.get_raw_data(master_file_index) ] )
+            img = array([_dat.as_numpy_array() for _dat in loader.get_raw_data(master_file_index) ] )
 
             # D = det_from_dict(img_handle["det"][()])
             B = loader.get_beam(master_file_index)
             D = loader.get_detector(master_file_index)
-            
+            if args.flat:
+                D = FLAT_DET
+            else:
+                print("FORCINGYOUTOUSEFLAT")
+                exit()
+
             m_init = args.Ncells_size 
             if args.usepreoptncells:
                 m_init = h["ncells_%s" % args.preopttag][shot_idx]
@@ -1162,10 +1173,14 @@ class GlobalData:
             u_fnames = df.proc_fnames.unique()
 
             u_h5s = {f:h5py.File(f,'r')["h5_path"][()] for f in u_fnames}
+            u_master_indices = {f:h5py.File(f,'r')["master_file_indices"][()] for f in u_fnames}
             img_fnames = []
-            for f,idx in df[['proc_fnames','proc_shot_idx']].values:
-                img_fnames.append( u_h5s[f][idx] )
+            master_indices = []
+            for f, idx in df[['proc_fnames', 'proc_shot_idx']].values:
+                img_fnames.append(u_h5s[f][idx])
+                master_indices.append(u_master_indices[f][idx])
             df["imgpaths"] = img_fnames
+            df["master_indices"] = master_indices
 
             df.to_pickle(outname)
 
