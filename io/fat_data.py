@@ -156,6 +156,7 @@ if rank == 0:
     from psutil import Process
     from glob import glob
     from os import getpid
+    from six import PY3
     from numpy import load as numpy_load
     from numpy import exp as EXP
     from resource import getrusage
@@ -196,6 +197,7 @@ if rank == 0:
     from dials.algorithms.indexing.compare_orientation_matrices import difference_rotation_matrix_axis_angle as diff_rot
 
 else:
+    PY3 = None
     ALIST = None
     np_indices = None
     EXP = ARANGE = LOGICAL_OR= LOADTXT = None
@@ -227,6 +229,7 @@ else:
 if has_mpi:
     if rank == 0:
         print("Broadcasting imports")
+    PY3 = comm.bcast(PY3)
     ALIST = comm.bcast(ALIST)
     EXP = comm.bcast(EXP)
     LOADTXT = comm.bcast(LOADTXT)
@@ -512,7 +515,10 @@ class GlobalData:
             #    readoutless_path = npz_path.replace("tang", "bear")
             #    img_handle = numpy_load(readoutless_path)
             else:
-                img_handle = numpy_load(npz_path)
+                if PY3:
+                    img_handle = numpy_load(npz_path, allow_pickle=True)
+                else:
+                    img_handle = numpy_load(npz_path)
 
             img = img_handle["img"]
 
@@ -991,12 +997,12 @@ class GlobalData:
             from collections import Counter
             print("Average multiplicities:")
             print("<><><><><><><><><><><><>")
-	    for i_bin in range(n_bin-1):
-		dmax, dmin = binner.bin_d_range(i_bin+1)
-		F_in_bin = marr.resolution_filter(d_max=dmax, d_min=dmin)
-		#multi_data = in_bin.data().as_numpy_array()
+            for i_bin in range(n_bin-1):
+                dmax, dmin = binner.bin_d_range(i_bin+1)
+                F_in_bin = marr.resolution_filter(d_max=dmax, d_min=dmin)
+                #multi_data = in_bin.data().as_numpy_array()
                 multi_in_bin = array(list(Counter(F_in_bin.indices()).values()))
-		print "%2.5g-%2.5g : Multiplicity=%.4f" % (dmax, dmin,multi_in_bin.mean()  )
+                print ("%2.5g-%2.5g : Multiplicity=%.4f" % (dmax, dmin,multi_in_bin.mean()))
                 for ii in range(1,100,8):
                     print("\t %d refls with multi %d" % (sum(multi_in_bin==ii), ii))
         
@@ -1256,7 +1262,7 @@ class GlobalData:
             fcell_xstart = self.RUC.fcell_xstart
             ucell_xstart = self.RUC.ucell_xstart[i_shot]
             scale_xpos = self.RUC.spot_scale_xpos[i_shot]
-            ncells_xpos = self.RUC.ncells_xpos[i_shot]
+            ncells_xstart = self.RUC.ncells_xstart[i_shot]
             nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
            
             bgplane_xpos = -1 
@@ -1273,7 +1279,7 @@ class GlobalData:
             proc_h5_idx = self.all_shot_idx[i_shot]
             proc_bbox_idx = self.all_proc_idx[i_shot]
 
-            ncells_val = self.RUC._get_m_val(i_shot)
+            ncells_val = tuple(self.RUC._get_m_val(i_shot))
             if not args.savepickleonly: 
                 init_misori = self.RUC.get_init_misorientation(i_shot)
                 final_misori = self.RUC.get_current_misorientation(i_shot)
@@ -1287,7 +1293,7 @@ class GlobalData:
             
             data_to_send.append((proc_h5_fname, proc_h5_idx, proc_bbox_idx,crystal_scale, Amat_refined, ncells_val, bgplane, \
                 img_corr, init_img_corr, fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, \
-                ncells_xpos, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c, bg_coef))
+                ncells_xstart, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c, bg_coef))
         
         if has_mpi:
             data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
@@ -1295,7 +1301,7 @@ class GlobalData:
             import pandas
             import h5py
             fnames, shot_idx, bbox_idx, xtal_scales, Amats, ncells_vals, bgplanes, image_corr, init_img_corr, \
-                fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xpos, bgplane_xpos, \
+                fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xstart, bgplane_xpos, \
                 init_misori, final_misori, ucell_a, ucell_c, bg_coef = zip(*data_to_send)
 
             df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx, "bbox_idx": bbox_idx,
@@ -1311,7 +1317,7 @@ class GlobalData:
                                    "rotZ": rotZ,
                                    "a": ucell_a, "c": ucell_c, 
                                    "scale_xpos": scale_xpos,
-                                   "ncells_xpos": ncells_xpos,
+                                   "ncells_xpos": ncells_xstart,
                                    "bgplanes_xpos": bgplane_xpos})
             u_fnames = df.proc_fnames.unique()
 
@@ -1367,8 +1373,8 @@ class GlobalData:
     def write_residual_background_image(self):
         assert args.checkbackground
         if has_mpi:
-	    self.true_residual = comm.reduce(self.true_residual) 
-	    self.true_residual_Nsamples = comm.reduce(self.true_residual_Nsamples)
+            self.true_residual = comm.reduce(self.true_residual)
+            self.true_residual_Nsamples = comm.reduce(self.true_residual_Nsamples)
         if rank==0:
             RES = self.true_residual / self.true_residual_Nsamples
             from numpy import nan_to_num

@@ -34,6 +34,7 @@ if rank == 0:
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--checkbackground", action="store_true")
     parser.add_argument("--shufflespectra", action="store_true")
+    parser.add_argument("--anisoNcells", action="store_true", help="refine with 3 indicual Ncells parameters Na,Nb,Nc representing mosaic domain size")
     parser.add_argument("--flat", action="store_true", help="use flat detector")
     parser.add_argument("--checkbackgroundsavename",default="_fat_data_background_residual_file", type=str, help="name of the residual background image")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
@@ -41,7 +42,7 @@ if rank == 0:
     parser.add_argument("--imagecorr", action="store_true")
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--fixrotZ", action='store_true')
-    parser.add_argument("--Ncells_size", default=30, type=float)
+    parser.add_argument("--Ncells_size", default=[30,30,30], nargs=3, type=float)
     parser.add_argument("--cella", default=None, type=float)
     parser.add_argument("--gradientonly", action='store_true') 
     parser.add_argument("--cellc", default=None, type=float)
@@ -315,7 +316,8 @@ class GlobalData:
         self.nbcryst = nanoBragg_crystal()
         self.nbcryst.dxtbx_crystal = init_crystal
         self.nbcryst.thick_mm = 0.1
-        self.nbcryst.Ncells_abc = args.Ncells_size, args.Ncells_size, args.Ncells_size
+        self.nbcryst.isotropic_ncells = not args.anisoNcells
+        self.nbcryst.Ncells_abc = tuple(args.Ncells_size)
 
         self.nbcryst.miller_array = init_miller_array
         self.nbcryst.n_mos_domains = args.Nmos
@@ -479,8 +481,12 @@ class GlobalData:
                 print("FORCINGYOUTOUSEFLAT")
                 exit()
 
-            m_init = args.Ncells_size 
+            m_init = args.Ncells_size[0]
+            if args.anisoNcells:
+                # TODO : allow args.Ncells_size to be 1 or 3 args
+                m_init = tuple(args.Ncells_size)
             if args.usepreoptncells:
+                # TODO: 1 or 3 values
                 m_init = h["ncells_%s" % args.preopttag][shot_idx]
 
             spot_scale_init = 1
@@ -745,10 +751,13 @@ class GlobalData:
         n_rot_param = 3
 
         # by default we assume each shot refines its own ncells param (mosaic domain size Ncells_abc in nanoBragg)
+        n_ncells = 1
+        if args.anisoNcells:
+            n_ncells = 3
         n_global_ncells_param = 0
-        n_per_image_ncells_param = 1
+        n_per_image_ncells_param = n_ncells
         if self.global_ncells_param:
-            n_global_ncells_param = 1
+            n_global_ncells_param = n_ncells
             n_per_image_ncells_param = 0
 
         # by default each shot refines its own unit cell parameters (e.g. a,b,c,alpha, beta, gamma)
@@ -955,7 +964,8 @@ class GlobalData:
         self.RUC.rescale_fcell_by_resolution = not args.NoRescaleFcellRes
         
         self.RUC.spot_scale_init = self.spot_scale_init 
-        self.RUC.m_init = self.m_init  
+        self.RUC.m_init = self.m_init
+        self.RUC.n_ncells_param = len(self.m_init[0])
 
         self.RUC.ignore_line_search_failed_step_at_lower_bound = args.ignorelinelow
         #FIXME 
@@ -1079,7 +1089,6 @@ class GlobalData:
                 self.RUC.use_curvatures = True
                 self.RUC.run(setup=False)
 
-
     def save_lbfgs_x_array_as_dataframe(self, outname):
         # Here we can save the refined parameters
         my_shots = self.all_shot_idx.keys()
@@ -1087,7 +1096,7 @@ class GlobalData:
         data_to_send = []
         image_corr = self.RUC.image_corr
         if image_corr is None:
-            image_corr = [-1]*len(my_shots)
+            image_corr = [-1] * len(my_shots)
         for i_shot in my_shots:
             rotX = self.RUC._get_rotX(i_shot)
             rotY = self.RUC._get_rotY(i_shot)
@@ -1096,37 +1105,41 @@ class GlobalData:
                 ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
                 Bmat = self.RUC.get_refined_Bmatrix(i_shot)
             else:
-                ang,ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, anglesXYZ = (rotX, rotY, rotZ))
+                ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, anglesXYZ=(rotX, rotY, rotZ))
                 pars = self.RUC._get_ucell_vars(i_shot)
                 self.all_ucell_mans[i_shot].variables = pars
-                Bmat = self.all_ucell_mans[i_shot].B_recipspace 
+                Bmat = self.all_ucell_mans[i_shot].B_recipspace
 
             bg_coef = -1
             if args.bgextracted:
                 bg_coef = self.RUC._get_bg_coef(i_shot)
-            
+
             C = self.RUC.CRYSTAL_MODELS[i_shot]
             C.set_B(Bmat)
             try:
                 C.rotate_around_origin(ax, ang)
             except RuntimeError:
                 pass
-#############################################
+            #############################################
             if args.savepickleonly:
                 a_init, _, c_init, _, _, _ = self.all_crystal_models[i_shot].get_unit_cell().parameters()
-                final_misori = -1
-###############################
+                a_tru, b_tru, c_tru = self.all_crystal_GT[i_shot].get_real_space_vectors()
+                try:
+                    final_misori = compare_with_ground_truth(a_tru, b_tru, c_tru, [C], symbol="P43212")[0]
+                except Exception as err:
+                    final_misori = -1
+            ###############################
 
             Amat_refined = C.get_A()
-            ucell_a,_,ucell_c,_,_,_ = C.get_unit_cell().parameters()
+            ucell_a, _, ucell_c, _, _, _ = C.get_unit_cell().parameters()
 
             fcell_xstart = self.RUC.fcell_xstart
             ucell_xstart = self.RUC.ucell_xstart[i_shot]
             scale_xpos = self.RUC.spot_scale_xpos[i_shot]
-            ncells_xpos = self.RUC.ncells_xpos[i_shot]
+            ncells_xstart = self.RUC.ncells_xstart[i_shot]
             nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
-           
-            bgplane_xpos = -1 
+
+            bgplane_xpos = -1
             bgplane = 0
             if not args.bgextracted:
                 bgplane_a_xpos = [self.RUC.bg_a_xstart[i_shot][i_spot] for i_spot in range(nspots)]
@@ -1140,30 +1153,31 @@ class GlobalData:
             proc_h5_idx = self.all_shot_idx[i_shot]
             proc_bbox_idx = self.all_proc_idx[i_shot]
 
-            ncells_val = self.RUC._get_m_val(i_shot)
-            if not args.savepickleonly: 
-                init_misori = -1
-                final_misori = -1
-                img_corr= self.RUC._get_image_correlation(i_shot)
+            ncells_val = tuple(self.RUC._get_m_val(i_shot))
+            if not args.savepickleonly:
+                init_misori = self.RUC.get_init_misorientation(i_shot)
+                final_misori = self.RUC.get_current_misorientation(i_shot)
+                img_corr = self.RUC._get_image_correlation(i_shot)
                 init_img_corr = self.RUC._get_init_image_correlation(i_shot)
             else:
-                init_misori = -1
+                init_misori = self.init_misori[i_shot]
+                # final_misori = self.init_misori[i_shot]  # computed above
                 img_corr = -1
-                final_misori = -1
                 init_img_corr = -1
-            
-            data_to_send.append((proc_h5_fname, proc_h5_idx, proc_bbox_idx,crystal_scale, Amat_refined, ncells_val, bgplane, \
-                img_corr, init_img_corr, fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, \
-                ncells_xpos, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c, bg_coef))
-        
+
+            data_to_send.append(
+                (proc_h5_fname, proc_h5_idx, proc_bbox_idx, crystal_scale, Amat_refined, ncells_val, bgplane, \
+                 img_corr, init_img_corr, fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, \
+                 ncells_xstart, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c, bg_coef))
+
         if has_mpi:
             data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
         if rank == 0:
             import pandas
             import h5py
             fnames, shot_idx, bbox_idx, xtal_scales, Amats, ncells_vals, bgplanes, image_corr, init_img_corr, \
-                fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xpos, bgplane_xpos, \
-                init_misori, final_misori, ucell_a, ucell_c, bg_coef = zip(*data_to_send)
+            fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xstart, bgplane_xpos, \
+            init_misori, final_misori, ucell_a, ucell_c, bg_coef = zip(*data_to_send)
 
             df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx, "bbox_idx": bbox_idx,
                                    "spot_scales": xtal_scales, "Amats": Amats, "ncells": ncells_vals,
@@ -1176,23 +1190,132 @@ class GlobalData:
                                    "rotX": rotX,
                                    "rotY": rotY,
                                    "rotZ": rotZ,
-                                   "a": ucell_a, "c": ucell_c, 
+                                   "a": ucell_a, "c": ucell_c,
                                    "scale_xpos": scale_xpos,
-                                   "ncells_xpos": ncells_xpos,
+                                   "ncells_xpos": ncells_xstart,
                                    "bgplanes_xpos": bgplane_xpos})
             u_fnames = df.proc_fnames.unique()
-
             u_h5s = {f:h5py.File(f,'r')["h5_path"][()] for f in u_fnames}
-            u_master_indices = {f:h5py.File(f,'r')["master_file_indices"][()] for f in u_fnames}
             img_fnames = []
-            master_indices = []
-            for f, idx in df[['proc_fnames', 'proc_shot_idx']].values:
-                img_fnames.append(u_h5s[f][idx])
-                master_indices.append(u_master_indices[f][idx])
+            for f,idx in df[['proc_fnames','proc_shot_idx']].values:
+                img_fnames.append( u_h5s[f][idx] )
             df["imgpaths"] = img_fnames
-            df["master_indices"] = master_indices
 
             df.to_pickle(outname)
+
+    #def save_lbfgs_x_array_as_dataframe(self, outname):
+    #    # Here we can save the refined parameters
+    #    my_shots = self.all_shot_idx.keys()
+    #    x = self.RUC.Xall
+    #    data_to_send = []
+    #    image_corr = self.RUC.image_corr
+    #    if image_corr is None:
+    #        image_corr = [-1]*len(my_shots)
+    #    for i_shot in my_shots:
+    #        rotX = self.RUC._get_rotX(i_shot)
+    #        rotY = self.RUC._get_rotY(i_shot)
+    #        rotZ = self.RUC._get_rotZ(i_shot)
+    #        if not args.savepickleonly:
+    #            ang, ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, i_shot=i_shot)
+    #            Bmat = self.RUC.get_refined_Bmatrix(i_shot)
+    #        else:
+    #            ang,ax = self.RUC.get_correction_misset(as_axis_angle_deg=True, anglesXYZ = (rotX, rotY, rotZ))
+    #            pars = self.RUC._get_ucell_vars(i_shot)
+    #            self.all_ucell_mans[i_shot].variables = pars
+    #            Bmat = self.all_ucell_mans[i_shot].B_recipspace
+
+    #        bg_coef = -1
+    #        if args.bgextracted:
+    #            bg_coef = self.RUC._get_bg_coef(i_shot)
+    #
+    #        C = self.RUC.CRYSTAL_MODELS[i_shot]
+    #        C.set_B(Bmat)
+    #        try:
+    #            C.rotate_around_origin(ax, ang)
+    #        except RuntimeError:
+    #            pass
+##############################################
+    #        if args.savepickleonly:
+    #            a_init, _, c_init, _, _, _ = self.all_crystal_models[i_shot].get_unit_cell().parameters()
+    #            final_misori = -1
+################################
+
+    #        Amat_refined = C.get_A()
+    #        ucell_a,_,ucell_c,_,_,_ = C.get_unit_cell().parameters()
+
+    #        fcell_xstart = self.RUC.fcell_xstart
+    #        ucell_xstart = self.RUC.ucell_xstart[i_shot]
+    #        scale_xpos = self.RUC.spot_scale_xpos[i_shot]
+    #        ncells_xpos = self.RUC.ncells_xpos[i_shot]
+    #        nspots = len(self.RUC.NANOBRAGG_ROIS[i_shot])
+    #
+    #        bgplane_xpos = -1
+    #        bgplane = 0
+    #        if not args.bgextracted:
+    #            bgplane_a_xpos = [self.RUC.bg_a_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+    #            bgplane_b_xpos = [self.RUC.bg_b_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+    #            bgplane_c_xpos = [self.RUC.bg_c_xstart[i_shot][i_spot] for i_spot in range(nspots)]
+    #            bgplane_xpos = list(zip(bgplane_a_xpos, bgplane_b_xpos, bgplane_c_xpos))
+    #            bgplane = [self.RUC._get_bg_vals(i_shot, i_spot) for i_spot in range(nspots)]
+
+    #        crystal_scale = self.RUC._get_spot_scale(i_shot)
+    #        proc_h5_fname = self.all_proc_fnames[i_shot]
+    #        proc_h5_idx = self.all_shot_idx[i_shot]
+    #        proc_bbox_idx = self.all_proc_idx[i_shot]
+
+    #        ncells_val = self.RUC._get_m_val(i_shot)
+    #        if not args.savepickleonly:
+    #            init_misori = -1
+    #            final_misori = -1
+    #            img_corr= self.RUC._get_image_correlation(i_shot)
+    #            init_img_corr = self.RUC._get_init_image_correlation(i_shot)
+    #        else:
+    #            init_misori = -1
+    #            img_corr = -1
+    #            final_misori = -1
+    #            init_img_corr = -1
+    #
+    #        data_to_send.append((proc_h5_fname, proc_h5_idx, proc_bbox_idx,crystal_scale, Amat_refined, ncells_val, bgplane, \
+    #            img_corr, init_img_corr, fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, \
+    #            ncells_xpos, bgplane_xpos, init_misori, final_misori, ucell_a, ucell_c, bg_coef))
+    #
+    #    if has_mpi:
+    #        data_to_send = comm.reduce(data_to_send, MPI.SUM, root=0)
+    #    if rank == 0:
+    #        import pandas
+    #        import h5py
+    #        fnames, shot_idx, bbox_idx, xtal_scales, Amats, ncells_vals, bgplanes, image_corr, init_img_corr, \
+    #            fcell_xstart, ucell_xstart, rotX, rotY, rotZ, scale_xpos, ncells_xpos, bgplane_xpos, \
+    #            init_misori, final_misori, ucell_a, ucell_c, bg_coef = zip(*data_to_send)
+
+    #        df = pandas.DataFrame({"proc_fnames": fnames, "proc_shot_idx": shot_idx, "bbox_idx": bbox_idx,
+    #                               "spot_scales": xtal_scales, "Amats": Amats, "ncells": ncells_vals,
+    #                               "bgplanes": bgplanes, "image_corr": image_corr,
+    #                               "init_image_corr": init_img_corr,
+    #                               "fcell_xstart": fcell_xstart,
+    #                               "ucell_xstart": ucell_xstart,
+    #                               "init_misorient": init_misori, "final_misorient": final_misori,
+    #                               "bg_coef": bg_coef,
+    #                               "rotX": rotX,
+    #                               "rotY": rotY,
+    #                               "rotZ": rotZ,
+    #                               "a": ucell_a, "c": ucell_c,
+    #                               "scale_xpos": scale_xpos,
+    #                               "ncells_xpos": ncells_xpos,
+    #                               "bgplanes_xpos": bgplane_xpos})
+    #        u_fnames = df.proc_fnames.unique()
+
+    #        u_h5s = {f:h5py.File(f,'r')["h5_path"][()] for f in u_fnames}
+    #        u_master_indices = {f:h5py.File(f,'r')["master_file_indices"][()] for f in u_fnames}
+    #        img_fnames = []
+    #        master_indices = []
+    #        for f, idx in df[['proc_fnames', 'proc_shot_idx']].values:
+    #            img_fnames.append(u_h5s[f][idx])
+    #            master_indices.append(u_master_indices[f][idx])
+    #        df["imgpaths"] = img_fnames
+    #        df["master_indices"] = master_indices
+
+    #        df.to_pickle(outname)
 
     def init_misset_results(self):
         results = []

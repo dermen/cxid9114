@@ -25,15 +25,23 @@ if args.nload is not None:
     fnames = fnames[:args.nload]
 df = pandas.concat([pandas.read_pickle(f) for f in fnames])
 Norig = len(df)
-cols = ["a", "c", "ncells", "spot_scales"]
+
+n_ncells_param = len(df["ncells"].values[0])
+ncells_vals = list(zip(*df.ncells.values))
+ncells_cols = []
+for i in range(1):
+    col_name = "ncells%d" %i
+    ncells_cols.append(col_name)
+    df[col_name] = ncells_vals[i]
+
+cols = ["a", "c", "spot_scales"] + ncells_cols
 
 df2 = df
-# NOTE uncomment lines to filter
 if args.filter:
     df2 = None
     for c in cols:
         m = df[c].median()
-        mad = np.median( np.abs(df[c] - m) )
+        mad = np.median( np.abs(df[c] - m))
         query = "%f < %s < %f" % (m-nsig*mad, c, m+nsig*mad )
         print(query)
         if df2 is None:
@@ -43,10 +51,10 @@ if args.filter:
 
 print("Maximum misorient = %f" % df2.final_misorient.max())
 print("Median misorient = %f" % df2.final_misorient.median())
-
 print("Ucell %f %10.7g" % (df2.a.median(), df2.c.median()))
 print("Spotscale %10.7g" % (df2.spot_scales.median()))
-print("Ncells %10.7g" % (df2.ncells.median()))
+for col in ncells_cols:
+    print("%s %10.7g" % (col, df2[col].median()))
 
 pklname = args.pklname
 if args.pklname is None:
