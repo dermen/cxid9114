@@ -52,7 +52,6 @@ parser.add_argument("--bg-name", dest='bg_name', default=None,
                     type=str, help="name of the background file, either to make/overwrite, or load (default)")
 parser.add_argument("-g", dest='ngpu_per_node', type=int, default=1, help='number of gpu')
 parser.add_argument("--overwrite", dest='overwrite', action='store_true', help='overwrite files')
-parser.add_argument("--write-img", dest='write_img', action='store_true')
 parser.add_argument('-N', dest='nodes', type=int, default=[1, 0], nargs=2, help="Number of nodes, and node id")
 parser.add_argument("-trials", dest='num_trials', help='trials per worker',
                     type=int, default=1)
@@ -494,8 +493,9 @@ for i_data in shot_range:
             SIM.free_all()
             del SIM
 
-    if args.write_img:
+    if args.cbf or args.saveh5 or args.savenpz:
 
+        print( "Rank %d: SAVING DAFILE" % rank)
         if args.cbf:
             assert not args.cspad
             SIM = nanoBragg(detector=DET, beam=BEAM)
@@ -504,7 +504,6 @@ for i_data in shot_range:
             cbfname = os.path.join(odirj, cbfname)
             SIM.to_cbf(cbfname)
 
-        print( "Rank %d: SAVING DAFILE" % rank)
         if args.cspad:
             data_array = simsDataSum.astype(np.float64)
         else:

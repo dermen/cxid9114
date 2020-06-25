@@ -30,6 +30,7 @@ if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--readoutless", action="store_true")
+    parser.add_argument("--badgeom", action="store_true")
     parser.add_argument("--checkbackground", action="store_true")
     parser.add_argument("--checkbackgroundsavename",default="_fat_data_background_residual_file", type=str, help="name of the residual background image")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
@@ -168,7 +169,10 @@ if rank == 0:
     from simtbx.diffBragg.nanoBragg_beam import nanoBragg_beam
     from simtbx.diffBragg.nanoBragg_crystal import nanoBragg_crystal
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
-    from cxid9114.geom.multi_panel import CSPAD
+    if args.badgeom:
+        from cxid9114.geom.multi_panel import CSPAD2 as CSPAD
+    else:
+        from cxid9114.geom.multi_panel import CSPAD
     from cctbx.array_family import flex
     flex_double = flex.double
     from cctbx import sgtbx, miller

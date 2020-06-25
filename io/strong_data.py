@@ -1,25 +1,26 @@
 #!/usr/bin/env libtbx.python
 import cProfile
 
-try:
-    from mpi4py import MPI
-    comm = MPI.COMM_WORLD
-    rank = comm.rank
-    size = comm.size
-    has_mpi = True
-except ImportError:
-    rank = 0
-    size = 1
-    has_mpi = False
-from numpy import load as np_load
+#try:
+#    from mpi4py import MPI
+#    comm = MPI.COMM_WORLD
+#    rank = comm.rank
+#    size = comm.size
+#    has_mpi = True
+#except ImportError:
+rank = 0
+size = 1
+has_mpi = False
 
+
+from numpy import load as np_load
 from cxid9114.utils import histogram_cyto_sim
 from dxtbx.model.detector import DetectorFactory
 from dxtbx import load as dxtbx_load
 det_from_dict = DetectorFactory.from_dict
 from dxtbx.model.beam import BeamFactory
 beam_from_dict = BeamFactory.from_dict
-from simtbx.diffBragg.refiners.global_refiner import GlobalRefiner
+from simtbx.diffBragg.refiners.pershot_refiner import GlobalRefiner
 from cxid9114.utils import open_flex
 from simtbx.diffBragg.utils import map_hkl_list
 import sys
@@ -32,6 +33,7 @@ if rank == 0:
     from argparse import ArgumentParser
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--checkbackground", action="store_true")
+    parser.add_argument("--shufflespectra", action="store_true")
     parser.add_argument("--flat", action="store_true", help="use flat detector")
     parser.add_argument("--checkbackgroundsavename",default="_fat_data_background_residual_file", type=str, help="name of the residual background image")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
@@ -81,7 +83,6 @@ if rank == 0:
     parser.add_argument("--usepreoptncells", action="store_true")
     parser.add_argument("--usepreoptbg", action="store_true")
     parser.add_argument("--noprintresbins", action="store_true")
-
     parser.add_argument("--sad", action="store_true")
     parser.add_argument("--symbol", default="P43212", type=str)
     parser.add_argument("--p9", action="store_true")
@@ -450,6 +451,10 @@ class GlobalData:
         #self.n_shots = len(my_shots)
         self.n_shots = 0
         img_num = 0
+
+        if args.shufflespectra:
+            all_fluences = h5py.File("cyto_run795_spectra.h5", "r")["weights"]
+
         for iii, (fname_idx, shot_idx) in enumerate(my_shots):
             
             h = self.my_open_files[fname_idx]
@@ -573,6 +578,11 @@ class GlobalData:
 
             energies = B.get_spectrum_energies().as_numpy_array()
             fluences = B.get_spectrum_weights().as_numpy_array()
+            if args.shufflespectra:
+                import random
+                Nspec = all_fluences.shape[0]
+                spectra_choice = random.choice(list(range(Nspec)))
+                fluences = all_fluences[spectra_choice]
             energies, fluences = histogram_cyto_sim(energies, fluences)
             wavelens = ENERGY_CONV / energies
             spectrum = list(zip(wavelens, fluences))

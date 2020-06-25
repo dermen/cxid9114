@@ -13,6 +13,7 @@ parser.add_argument("--flat", action="store_true")
 parser.add_argument("--showcompleteness", action="store_true")
 parser.add_argument("--savefigdir", default=None, type=str)
 parser.add_argument("--filteredexpt", type=str, required=True, help="filtered combined experiment file")
+parser.add_argument("--pklfile", type=str, default=None, help="path to a pandas pickle")
 parser.add_argument("--Z", type=float, default=2, help="zinger median absolute deviation Zscore")
 parser.add_argument("--deltaq", type=float, default=0.07, help="reciprocal space width of bound box")
 parser.add_argument("--dilate", default=1, type=int, help="factor by which to dilate the integration mask")
@@ -86,6 +87,15 @@ if args.Nmax is not None:
     El = El[:args.Nmax]
 Nexper = len(El)
 
+PKL = None
+if args.pklfile is not None:
+    PKL = pandas.read_pickle(args.pklfile)
+    try:
+        PKL.imgpaths.values[0].decode()
+        PKL.imgpaths = PKL.imgpaths.str.decode("utf8")
+    except AttributeError:
+        pass
+
 DET = El.detectors()[0] 
 if args.flat:
     det_El = ExperimentListFactory.from_json_file("flat_swiss.expt", check_format=False)
@@ -138,13 +148,22 @@ for i_shot in range(Nexper):
     filepath = iset.get_path(0)
     assert len(iset)==1
     fidx = iset.indices()[0]
-    
     img_data = np.array([panel.as_numpy_array() for panel in loaders[filepath].get_raw_data(fidx)])
     sdim, fdim = img_data[0].shape
+
     # get simulation parameters
-    Ncells_abc = 10,10,10 #60, 60, 60 
+    m = 50
+    if PKL is not None:
+        df = PKL.query("master_indices==%d" % fidx).query("imgpaths=='%s'" % filepath)
+        assert len(df)==1
+        m = int(np.round(df.ncells.values[0]))
+        Gs = df.spot_scales.values[0]
+        print("Scale facrtor %f" % Gs)
+        print("Ncells %f" % m)
+        m = m*3
+    Ncells_abc = m,m,m #10,10,10 #60, 60, 60 
     profile = "gauss"
-    beamsize_mm = 0.001
+    beamsize_mm = 0.000886226925452758   # 0.001
     exposure_s = 1
     fluences = BEAM.get_spectrum_weights().as_numpy_array()
     total_flux = 1e12
@@ -209,7 +228,8 @@ for i_shot in range(Nexper):
     panel_ids = exper_refls_strong["panel"]
     panels_with_spots = set(panel_ids)
     alist_panels = list(panels_with_spots) 
-    #alist_panels = list(range(64,72))
+
+    # alist_panels = list(range(64,72))
     panels_with_spots = [i for i in panels_with_spots if i in alist_panels]
     rois_perpanel = {}
     panel_keys = {}
@@ -245,7 +265,7 @@ for i_shot in range(Nexper):
     simsAB = sim_utils.sim_colors(
         crystal, DET, BEAM, FF,
         energies, fluences, pids=panels_with_spots, 
-        profile=profile, cuda=not args.nocuda, oversample=1,
+        profile=profile, cuda=not args.nocuda, oversample=0,
         Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
         master_scale=1, recenter=True,time_panels=False,
         roi_pp=rois_perpanel, counts_pp=counts_perpanel,
@@ -254,7 +274,13 @@ for i_shot in range(Nexper):
     tsim = time.time()-t
 
     datas, sims, i_refs, cents, cents_mm  = [],[],[],[],[]
+    #img_data_copy = np.zeros_like(img_data)
     for pid in range(len(DET)):
+        med_on_panel = np.median(img_data[pid])
+        if med_on_panel < 0:
+            med_on_panel = 10
+        print(pid)
+        #img_data_copy[pid] = np.random.poisson( np.ones_like(img_data[pid])*med_on_panel )
         sim_panel = simsAB[pid]
         if sim_panel is None:
             continue
@@ -262,6 +288,7 @@ for i_shot in range(Nexper):
         rois = rois_perpanel[panel_key]
         for i_roi, ((i1,i2),(j1,j2)) in enumerate(rois):
             roi_data = img_data[pid][j1:j2, i1:i2]
+            #img_data_copy[pid][j1:j2, i1:i2] = roi_data
             roi_sim = sim_panel[j1:j2, i1:i2]
             Ivals = roi_sim.ravel()
             Isum = Ivals.sum()
@@ -283,10 +310,36 @@ for i_shot in range(Nexper):
             i_ref  = refl_ids[panel_key][i_roi]
             i_refs.append(i_ref)
 
+    #from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter
+    #sh = img_data.shape
+    #print("Saving")
+    #sim_data = np.zeros_like(img_data)
+    #for i,p in enumerate(simsAB):
+    #    if p is None:
+    #        continue
+    #    sim_data[i] = p
+    #sim_data /= sim_data.max()
+    #sim_data *= 10000
+    #mn = sim_data[ sim_data > 0] .mean()
+    #sim_data += mn*0.1
+    #print("Sampling")
+    #noisy = np.random.poisson(sim_data)
+    #beam_dict = BEAM.to_dict()
+    #det_dict = DET.to_dict()
+    #beam_dict.pop("spectrum_energies")
+    #beam_dict.pop("spectrum_weights")
+    #writer = H5AttributeGeomWriter("some_cytos_shot%d.hdf5" % i_shot, image_shape=sh, num_images=4, \
+    #    		detector=det_dict, beam=beam_dict, detector_and_beam_are_dicts=True)
+    #writer.add_image(img_data)
+    #writer.add_image(img_data_copy)
+    #writer.add_image(noisy)
+    #writer.add_image(sim_data)
+    #writer.close_file()
+
     shot_data += list(zip([i_shot]*len(cents), cents , cents_mm, i_refs ) )
 
-    print("Rank %d: shot %d / %d  has %d refls TOok %f seconds to simulate %d panels " 
-        % (rank, i_shot, Nexper, len(i_refs), tsim, len(panels_with_spots)), flush=True)
+    print("Rank %d: shot %d / %d  has %d/%d refls TOok %f seconds to simulate %d panels, m=%d " 
+        % (rank, i_shot, Nexper, len(i_refs), len(exper_refls_strong), tsim, len(panels_with_spots), m), flush=True)
 
 
 if has_mpi:

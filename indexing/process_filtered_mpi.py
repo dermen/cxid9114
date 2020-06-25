@@ -348,7 +348,7 @@ for i_shot in range(Nexper):
                 continue
             shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag, fit_sel = result
             if below_zero_flag and not args.keepbelowzero:
-                print("Tilt plane dips below 0!")
+                #print("Tilt plane dips below 0!")
                 continue
             else:
                 all_below_zero.append(below_zero_flag) 
