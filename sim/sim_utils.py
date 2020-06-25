@@ -319,7 +319,7 @@ def sim_colors(crystal, detector, beam, fcalcs, energies, fluxes, pids=None,
                div_tup=(0.,0.,0.), disp_pct=0., mos_dom=2, mos_spread=0.15, profile=None,
                roi_pp=None, counts_pp=None, cuda=False, omp=False, gimmie_Patt=False,
                add_water=False, boost=1, device_Id=0,
-               beamsize_mm=0.001, exposure_s=None, accumulate=False, only_water=False, 
+               beamsize_mm=0.001, exposure_s=1, accumulate=False, only_water=False, 
                add_spots=True, adc_offset=0, show_params=False, crystal_size_mm=None,
                amorphous_sample_thick_mm=0.005, free_all=True, master_scale=None,
                one_sf_array=False, printout_pix=None, time_panels=False, recenter=True):

@@ -163,7 +163,7 @@ def main():
             # tilt dips below zero
             below_zero = h["below_zero"]["shot%d" % shot_idx][()]
         else:
-            below_zero is None
+            below_zero = None
                 
 
         # use the known cell to compute the resolution of the spots
