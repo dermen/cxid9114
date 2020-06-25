@@ -21,6 +21,7 @@ from cctbx import miller
 from cctbx.crystal import symmetry
 import os
 import numpy as np
+import six
 import glob
 from cxid9114 import utils
 from cctbx.array_family import flex
@@ -33,7 +34,10 @@ ucell = args.unitcell
 ftruth = utils.open_flex(args.truthpkl)
 
 
-asu_map = np.load( os.path.join( args.datdir , "f_asu_map.npy") )[()]
+if six.PY3:
+    asu_map = np.load( os.path.join( args.datdir , "f_asu_map.npy"), allow_pickle=True )[()]
+else:
+    asu_map = np.load( os.path.join( args.datdir , "f_asu_map.npy") )[()]
 fcell_pos, asu_indices = zip(*asu_map.items())
 
 flex_indices = flex.miller_index(asu_indices)
@@ -55,7 +59,7 @@ print (data_files)
 n_files = len(data_files)
 
 # always load the first and last iteration.. 
-indices = [0]+ range( 1, n_files-2, args.stride) + [n_files-1]
+indices = [0]+ list(range( 1, n_files-2, args.stride)) + [n_files-1]
 if args.lastonly:
     indices = [indices[-1]]
 
@@ -64,7 +68,10 @@ sym = symmetry(unit_cell=ucell, space_group_info=sgi)
 
 mset = miller.set(sym , flex_indices, anomalous_flag=True)
 for i_iter in indices:
-    fcell_data = flex.double( np.load(data_files[i_iter])['fvals']  )
+    if six.PY3:
+        fcell_data = flex.double( np.load(data_files[i_iter], allow_pickle=True)['fvals']  )
+    else:
+        fcell_data = flex.double( np.load(data_files[i_iter])['fvals']  )
     fobs = miller.array( mset, data=fcell_data).set_observation_type_xray_amplitude()
     
     if args.savelast is not None and i_iter==indices[-1]:
@@ -79,7 +86,7 @@ for i_iter in indices:
     else:
         r,c = utils.compute_r_factor( ftruth, fobs_sel, verbose=False, is_flex=True, sort_flex=True)
         print ("iter %d: Rtruth=%.4f, CCdeltaAnom=%.4f"% (i_iter, r,c))
-    print fobs_sel.completeness()
+    print (fobs_sel.completeness())
 
 
 if args.mtzoutput is not None:
