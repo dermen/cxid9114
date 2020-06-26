@@ -152,16 +152,25 @@ for i_shot in range(Nexper):
     sdim, fdim = img_data[0].shape
 
     # get simulation parameters
-    m = 50
+    Ncells_abc = 50,50,50
     if PKL is not None:
         df = PKL.query("master_indices==%d" % fidx).query("imgpaths=='%s'" % filepath)
         assert len(df)==1
-        m = int(np.round(df.ncells.values[0]))
+        m = df.ncells.values[0]
+        if isinstance(m, float):
+            m = int(np.round(m))
+            Ncells_abc = m,m,m 
+        elif len(m)==1:
+            m = int(np.round(m))
+            Ncells_abc = m,m,m 
+        else:
+            assert len(m)==3
+            Na,Nb,Nc = df[["ncells0","ncells1","ncells2"]].values[0]
+            Ncells_abc = int(np.round(Na)), int(np.round(Nb)), int(np.round(Nc))
+
         Gs = df.spot_scales.values[0]
         print("Scale facrtor %f" % Gs)
-        print("Ncells %f" % m)
-        m = m*3
-    Ncells_abc = m,m,m #10,10,10 #60, 60, 60 
+        print("Ncells %d %d %d" %  (Ncells_abc))
     profile = "gauss"
     beamsize_mm = 0.000886226925452758   # 0.001
     exposure_s = 1
@@ -271,15 +280,17 @@ for i_shot in range(Nexper):
         roi_pp=rois_perpanel, counts_pp=counts_perpanel,
         exposure_s=exposure_s, beamsize_mm=beamsize_mm, device_Id=device_Id,
         show_params=args.show_params, accumulate=True, crystal_size_mm=xtal_size)
+    
     tsim = time.time()-t
-
+    if rank==0:
+        print("Done with sim took %f sec" % tsim)
     datas, sims, i_refs, cents, cents_mm  = [],[],[],[],[]
     #img_data_copy = np.zeros_like(img_data)
     for pid in range(len(DET)):
-        med_on_panel = np.median(img_data[pid])
-        if med_on_panel < 0:
-            med_on_panel = 10
-        print(pid)
+        #med_on_panel = np.median(img_data[pid])
+        #if med_on_panel < 0:
+        #    med_on_panel = 10
+        #print(pid)
         #img_data_copy[pid] = np.random.poisson( np.ones_like(img_data[pid])*med_on_panel )
         sim_panel = simsAB[pid]
         if sim_panel is None:
@@ -338,8 +349,8 @@ for i_shot in range(Nexper):
 
     shot_data += list(zip([i_shot]*len(cents), cents , cents_mm, i_refs ) )
 
-    print("Rank %d: shot %d / %d  has %d/%d refls TOok %f seconds to simulate %d panels, m=%d " 
-        % (rank, i_shot, Nexper, len(i_refs), len(exper_refls_strong), tsim, len(panels_with_spots), m), flush=True)
+    print("Rank %d: shot %d / %d  has %d/%d refls TOok %f seconds to simulate %d panels, Ncells=%d %d %d " 
+        % (rank, i_shot, Nexper, len(i_refs), len(exper_refls_strong), tsim, len(panels_with_spots), Ncells_abc[0], Ncells_abc[1], Ncells_abc[2]), flush=True)
 
 
 if has_mpi:
