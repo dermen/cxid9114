@@ -4,6 +4,7 @@ from argparse import ArgumentParser
 parser = ArgumentParser("Aggregates stage 1 results as a pandas dataframe, which is stored as a pandas pickle")
 parser.add_argument("--nload", type=int, default=None, help="optional param to load a certain number of shots")
 parser.add_argument("--filter", action="store_true", help="filter shots based on population statistics")
+parser.add_argument("--addMasterInfo", action="store_true", help="add master file information to files")
 parser.add_argument("--plot", action="store_true", help="whether to display histograms of various parameters")
 parser.add_argument("--stage1dir", type=str, help="path to diffBragg stage1 output folder", required=True)
 parser.add_argument("--nsig", default=7, type=float, help="parameter for filtering shots (decrease to filter mode)")
@@ -17,6 +18,7 @@ import os
 import pylab as plt
 import numpy as np
 import sys
+import h5py
 
 nsig = args.nsig
 globstr = os.path.join( args.stage1dir, "results_job*/*trial2.pkl")
@@ -24,15 +26,30 @@ fnames = glob.glob(globstr)
 if args.nload is not None:
     fnames = fnames[:args.nload]
 df = pandas.concat([pandas.read_pickle(f) for f in fnames])
+
+if args.addMasterInfo:
+    print("adding master file info")
+    u_fnames = df.proc_fnames.unique()
+    u_h5s = {f:h5py.File(f,'r')["h5_path"][()] for f in u_fnames}
+    u_master_indices = {f:h5py.File(f,'r')["master_file_indices"][()] for f in u_fnames}
+    img_fnames = []
+    master_indices = []
+    for f, idx in df[['proc_fnames', 'proc_shot_idx']].values:
+        img_fnames.append(u_h5s[f][idx])
+        master_indices.append(u_master_indices[f][idx])
+    df["imgpaths"] = img_fnames
+    df["master_indices"] = master_indices
+
+
 Norig = len(df)
 
 n_ncells_param = len(df["ncells"].values[0])
 ncells_vals = list(zip(*df.ncells.values))
 ncells_cols = []
-for i in range(1):
-    col_name = "ncells%d" %i
+for i_ncells in range(n_ncells_param):
+    col_name = "ncells%d" %i_ncells
     ncells_cols.append(col_name)
-    df[col_name] = ncells_vals[i]
+    df[col_name] = ncells_vals[i_ncells]
 
 cols = ["a", "c", "spot_scales"] + ncells_cols
 

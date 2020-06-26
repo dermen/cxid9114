@@ -41,7 +41,6 @@ try:
 except AttributeError:
     pass
 
-
 for i in range(N):
     iset = isets[i]
     path = iset.get_path(0)
