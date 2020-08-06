@@ -132,6 +132,7 @@ if rank == 0:
     parser.add_argument("--scale", nargs="+", default=None, type=int)
     parser.add_argument("--umatrix", nargs="+", default=None, type=int)
     parser.add_argument("--bmatrix", nargs="+", default=None, type=int)
+    parser.add_argument("--refineSpectra", nargs="+", default=None, type=int)
     parser.add_argument("--bg", nargs="+", default=None, type=int)
     parser.add_argument("--maxcalls", nargs="+", required=True, type=int)
     parser.add_argument("--plotfcell", action="store_true")
@@ -139,6 +140,8 @@ if rank == 0:
     parser.add_argument("--savepickleonly", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
     parser.add_argument("--bgextracted", action="store_true")
+    parser.add_argument("--spectraCoef", type=float, nargs=2, default=None, help="two coefficients [a,b] that redefine the spectrum wavelength as a*lambda +b")
+    parser.add_argument("--histMethod", type=int, choices=[0,1], default=0)
 
     args = parser.parse_args()
     print("ARGS:")
@@ -589,8 +592,17 @@ class GlobalData:
                 Nspec = all_fluences.shape[0]
                 spectra_choice = random.choice(list(range(Nspec)))
                 fluences = all_fluences[spectra_choice]
-            energies, fluences = histogram_cyto_sim(energies, fluences)
+            energies, fluences = histogram_cyto_sim(energies, fluences, method=args.histMethod)
             wavelens = ENERGY_CONV / energies
+            if args.spectraCoef is not None:
+                # store energy before shifting, for comparison
+                en_before = ENERGY_CONV / (np.sum(wavelens*fluences) / fluences.sum() )
+
+                lam0, lam1 = args.spectraCoef
+                wavelens = lam0 + lam1*wavelens
+
+                en_after =  ENERGY_CONV/ (np.sum(wavelens*fluences) / fluences.sum())
+                print("Shfited energy spectra: Before %.4f  After %.4f" % (en_before, en_after))
             spectrum = list(zip(wavelens, fluences))
 
             if args.forcemono:
@@ -813,7 +825,8 @@ class GlobalData:
             self.local_unknowns_across_all_ranks = comm.bcast(self.local_unknowns_across_all_ranks, root=0)
 
         # TODO: what is the 2 for (its gain and detector distance which are not currently refined...
-        self.n_global_params = 2 + n_global_ucell_param + n_global_ncells_param + self.num_hkl_global  # detdist and gain + ucell params
+        n_spectra_param = 2
+        self.n_global_params = 2 + n_spectra_param + n_global_ucell_param + n_global_ncells_param + self.num_hkl_global  # detdist and gain , spec params ,ucell params , ncell params
 
         self.n_total_unknowns = self.local_unknowns_across_all_ranks + self.n_global_params  # gain and detdist (originZ)
 
@@ -915,7 +928,7 @@ class GlobalData:
                     self.freeze_idx[h] = True
 
     def pre_refine_setup(self, i_trial=0, refine_fcell=None, refine_spot_scale=None, refine_Umatrix=None, 
-            refine_Bmatrix=None, refine_ncells=None, refine_bg=None, max_calls=None, x_init=None):
+            refine_Bmatrix=None, refine_ncells=None, refine_bg=None, refine_spectra=None, max_calls=None, x_init=None):
 
         self.RUC = GlobalRefiner(
             n_total_params=self.n_total_unknowns,
@@ -953,6 +966,13 @@ class GlobalData:
             self.RUC.refine_crystal_scale = refine_spot_scale
         if max_calls is not None:
             self.RUC.max_calls = max_calls 
+        if refine_spectra is not None:
+            self.RUC.refine_spectra = refine_spectra
+            
+        self.RUC.n_spectra_param = 2
+        self.RUC.spectra_coefficients_sigma = .01, .01
+        self.RUC.spectra_coefficients_init = 0, 1 
+        self.RUC.lambda_coef_ranges = [(-0.01, 0.01), (.95, 1.05)]
 
         self.RUC.x_init = x_init
         self.RUC.only_pass_refined_x_to_lbfgs = args.xrefinedonly
@@ -1200,6 +1220,9 @@ class GlobalData:
             for f,idx in df[['proc_fnames','proc_shot_idx']].values:
                 img_fnames.append( u_h5s[f][idx] )
             df["imgpaths"] = img_fnames
+            lam0, lam1 = self.RUC._get_spectra_coefficients()
+            df["lam0"] = lam0
+            df["lam1"] = lam1
 
             df.to_pickle(outname)
 
@@ -1402,6 +1425,7 @@ if args.protocol=="per_shot":
                 "refine_ncells": bool(args.ncells[i_trial]),
                 "refine_bg": bool(args.bg[i_trial]),
                 "refine_spot_scale": bool(args.scale[i_trial]),
+                "refine_spectra": bool(args.refineSpectra[i_trial]),
                 "i_trial": i_trial, 
                 "x_init": x_init}
         B.pre_refine_setup(**setup_args) 

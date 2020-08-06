@@ -4,6 +4,7 @@ import six
 from scipy.signal import savgol_filter
 import matplotlib
 import pylab as plt
+from scipy.signal import argrelmax, argrelmin
 
 import numpy as np
 from dials.array_family import flex
@@ -506,17 +507,31 @@ def aligned_lyso_crystal():
     return C
 
 
-def histogram_cyto_sim(energies, fluences, total_flux=1e12, nbins=100):
+def histogram_cyto_sim(energies, fluences, total_flux=1e12, nbins=100, method=0, ev_width=1.5, baseline_sigma=3.5):
     # bin the spectrum
-    energy_bins = np.linspace(energies.min() - 1e-6, energies.max() + 1e-6, nbins + 1)
-    fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
-    energies = .5 * (energy_bins[:-1] + energy_bins[1:])
+    if method==0:
+        energy_bins = np.linspace(energies.min() - 1e-6, energies.max() + 1e-6, nbins + 1)
+        fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
+        energies = .5 * (energy_bins[:-1] + energy_bins[1:])
 
-    # only simulate if significantly above the baselein (TODO make more accurate)
-    cutoff = np.median(fluences) * 0.8
-    is_finite = fluences > cutoff
-    fluences = fluences[is_finite]
+        # only simulate if significantly above the baselein (TODO make more accurate)
+        cutoff = np.median(fluences) * 0.8
+        is_finite = fluences > cutoff
+        fluences = fluences[is_finite]
+        energies = energies[is_finite]
+    else: # method==1:
+        w = fluences
+        med = np.median(np.hstack((w[:100] ,w[-100:])))
+        sigma = np.std(np.hstack((w[:100] ,w[-100:])))
+        baseline = med + baseline_sigma*sigma
+        width = ev_width/((energies[-1] - energies[0]) / len(energies))
+        idx_min=argrelmin(savgol_filter(w,21, 11),order=int(width/3.))[0]
+        idx_max=argrelmax(savgol_filter(w,21, 11),order=int(width/3.))[0]
+        idx = sorted(np.hstack((idx_min, idx_max)))
+        kept_idx = [i for i in idx if w[i] > baseline]
+        energies = energies[kept_idx]
+        fluences = fluences[kept_idx]
     fluences /= fluences.sum()
     fluences *= total_flux
-    energies = energies[is_finite]
+
     return energies, fluences

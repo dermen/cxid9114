@@ -69,7 +69,7 @@ output.log_level=1"
 
 #run merge
 
-srun -n 40 -c 2 cctbx.xfel.merge ${effective_params}
+srun -n $4 -c 2 cctbx.xfel.merge ${effective_params}
 
 END_MERGE=$(date +"%s")
 

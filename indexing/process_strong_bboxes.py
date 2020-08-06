@@ -18,6 +18,7 @@ parser.add_argument("--Z", type=float, default=2, help="zinger median absolute d
 parser.add_argument("--deltaq", type=float, default=0.07, help="reciprocal space width of bound box")
 parser.add_argument("--dilate", default=1, type=int, help="factor by which to dilate the integration mask")
 parser.add_argument("--defaultF", type=float, default=1e3, help="for prediction simulation use this value at every Fhkl")
+parser.add_argument("--merge", type=str, default=None)
 parser.add_argument("--thresh", type=float, default=1e-2, help="simulated pixels above this value will be used to form the integration mask")
 parser.add_argument("--o", help='output directoty', type=str, default='.')
 parser.add_argument("--tag", help='output tag', type=str, default='boop')
@@ -30,6 +31,9 @@ parser.add_argument("--sanityplots", action='store_true', help="whether to displ
 parser.add_argument("--pause", type=float, default=0.5, help="pause interval in seconds between consecutive plots")
 parser.add_argument("--gain", type=float, default=1, help="value for adu per photon")
 parser.add_argument("--readout", type=float, default=3)
+parser.add_argument("--spectraCoef", nargs=2, type=float, default=None)
+parser.add_argument("--histMethod", choices=[0,1], type=int, default=0)
+parser.add_argument("--writeimages", action="store_true", help="write output image for prediction")
 args = parser.parse_args()
 
 GAIN = args.gain
@@ -81,8 +85,11 @@ if rank == 0:
 # Load in the reflection tables and experiment lists
 from dxtbx.model import ExperimentList
 from cxid9114.parameters import ENERGY_CONV
-print ("Reading in the files")
-El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
+if rank==0:
+    print ("Reading in the files")
+    El = ExperimentListFactory.from_json_file(args.filteredexpt, check_format=False)
+if rank==0:
+    print("Done reading!")
 if args.Nmax is not None:
     El = El[:args.Nmax]
 Nexper = len(El)
@@ -134,8 +141,8 @@ for i_e, Exper in enumerate(El):
 
 shot_data = []
 n_processed = 0
+gain_noise = np.random.normal(9.4, 0.03*9.4, (256, 254, 254))
 for i_shot in range(Nexper):
-   
     if i_shot % size != rank:
         continue
     if rank==0:
@@ -145,6 +152,14 @@ for i_shot in range(Nexper):
     Exper = El[i_shot] 
     BEAM = Exper.beam
     iset = Exper.imageset
+    iset =  SOME CODA TO RELOAD IMAGESET ( [experimen_path], [path_indices] )
+
+    #BEAM = iset.get_beam(0)
+    sectrum = isret.get_spectrum(0)
+    weight s= spectrum.get_weights()
+    ens = spectrum.get_energies()
+
+
     filepath = iset.get_path(0)
     assert len(iset)==1
     fidx = iset.indices()[0]
@@ -153,6 +168,7 @@ for i_shot in range(Nexper):
 
     # get simulation parameters
     Ncells_abc = 50,50,50
+    Gs = None
     if PKL is not None:
         df = PKL.query("master_indices==%d" % fidx).query("imgpaths=='%s'" % filepath)
         assert len(df)==1
@@ -182,20 +198,32 @@ for i_shot in range(Nexper):
     # HERE WE WILL DO PREDICTIONS
     # <><><><><><><><><><><><><><
     energies = BEAM.get_spectrum_energies().as_numpy_array()
+            
+    energies, fluences = utils.histogram_cyto_sim(energies, fluences, method=args.histMethod)
 
-    # bin the spectrum
-    nbins = 100
-    energy_bins = np.linspace(energies.min()-1e-6, energies.max()+1e-6, nbins+1) 
-    fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
-    energies = .5*(energy_bins[:-1] + energy_bins[1:]) 
+    ## bin the spectrum
+    #nbins = 100
+    #energy_bins = np.linspace(energies.min()-1e-6, energies.max()+1e-6, nbins+1) 
+    #fluences = np.histogram(energies, bins=energy_bins, weights=fluences)[0]
+    #energies = .5*(energy_bins[:-1] + energy_bins[1:]) 
    
-    # only simulate if significantly above the baselein (TODO make more accurate)
-    cutoff = np.median(fluences) * 0.8
-    is_finite = fluences > cutoff
-    fluences = fluences[is_finite]
-    fluences /= fluences.sum()
-    fluences *= total_flux
-    energies = energies[is_finite]
+    ## only simulate if significantly above the baselein (TODO make more accurate)
+    #cutoff = np.median(fluences) * 0.8
+    #is_finite = fluences > cutoff
+    #fluences = fluences[is_finite]
+    #fluences /= fluences.sum()
+    #fluences *= total_flux
+    #energies = energies[is_finite]
+    if args.spectraCoef is not None:
+        # store energy before shifting, for comparison
+        en_before = np.sum(energies*fluences) / fluences.sum() 
+
+        wavelens = ENERGY_CONV/energies
+        lam0, lam1 = args.spectraCoef
+        wavelens = lam0 + lam1*wavelens
+        energies = ENERGY_CONV / wavelens
+        en_after =   np.sum(energies*fluences) / fluences.sum()
+        print("Shfited energy spectra: Before %.4f  After %.4f" % (en_before, en_after))
 
     # mono sim
     if args.mono:
@@ -215,7 +243,6 @@ for i_shot in range(Nexper):
         plt.draw()
         plt.pause(args.pause)
 
-
     # grab the detector datas
     detdist = abs(DET[0].get_origin()[-1])
     pixsize = DET[0].get_pixel_size()[0]
@@ -230,6 +257,10 @@ for i_shot in range(Nexper):
     miller_set = symm.build_miller_set(anomalous_flag=True, d_min=1.5, d_max=999)
     Famp = flex.double(np.ones(len(miller_set.indices())) * args.defaultF)
     mil_ar = miller.array(miller_set=miller_set, data=Famp).set_observation_type_xray_amplitude()
+    
+    if args.merge is not None:
+        mil_ar = utils.open_flex(args.merge)
+
     FF = [mil_ar] + [None]*(len(energies)-1)
 
     # SELECT THE STRONG SPOT ROI
@@ -271,27 +302,36 @@ for i_shot in range(Nexper):
     device_Id = np.random.choice(range(n_gpu))
     # call the simulation helper
     t = time.time()
+    master_scale = 1
+    if Gs is not None:
+        master_scale = Gs*1e6
     simsAB = sim_utils.sim_colors(
         crystal, DET, BEAM, FF,
         energies, fluences, pids=panels_with_spots, 
         profile=profile, cuda=not args.nocuda, oversample=0,
         Ncells_abc=Ncells_abc, mos_dom=1, mos_spread=0,
-        master_scale=1, recenter=True,time_panels=False,
+        recenter=True,time_panels=False,
         roi_pp=rois_perpanel, counts_pp=counts_perpanel,
         exposure_s=exposure_s, beamsize_mm=beamsize_mm, device_Id=device_Id,
-        show_params=args.show_params, accumulate=True, crystal_size_mm=xtal_size)
+        show_params=args.show_params, accumulate=True, crystal_size_mm=xtal_size, 
+        master_scale=master_scale)
     
     tsim = time.time()-t
     if rank==0:
         print("Done with sim took %f sec" % tsim)
     datas, sims, i_refs, cents, cents_mm  = [],[],[],[],[]
-    #img_data_copy = np.zeros_like(img_data)
+    if args.writeimages:
+        img_data_copy = np.zeros_like(img_data)
+        background_image = np.zeros_like(img_data)
+    
     for pid in range(len(DET)):
-        #med_on_panel = np.median(img_data[pid])
-        #if med_on_panel < 0:
-        #    med_on_panel = 10
-        #print(pid)
-        #img_data_copy[pid] = np.random.poisson( np.ones_like(img_data[pid])*med_on_panel )
+        if args.writeimages:
+            med_on_panel = np.median(img_data[pid])
+            if med_on_panel < 0:
+                med_on_panel = 10
+            img_data_copy[pid] = np.random.poisson( np.ones_like(img_data[pid])*med_on_panel )
+            background_image[pid] = med_on_panel
+        
         sim_panel = simsAB[pid]
         if sim_panel is None:
             continue
@@ -299,7 +339,11 @@ for i_shot in range(Nexper):
         rois = rois_perpanel[panel_key]
         for i_roi, ((i1,i2),(j1,j2)) in enumerate(rois):
             roi_data = img_data[pid][j1:j2, i1:i2]
-            #img_data_copy[pid][j1:j2, i1:i2] = roi_data
+            if args.writeimages:
+                img_data_copy[pid][j1:j2, i1:i2] = roi_data
+                med_in_roi = np.median(roi_data)
+                background_image[pid][j1:j2, i1:i2] = med_in_roi #/ 9.481  # gain correct
+
             roi_sim = sim_panel[j1:j2, i1:i2]
             Ivals = roi_sim.ravel()
             Isum = Ivals.sum()
@@ -321,31 +365,45 @@ for i_shot in range(Nexper):
             i_ref  = refl_ids[panel_key][i_roi]
             i_refs.append(i_ref)
 
-    #from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter
-    #sh = img_data.shape
-    #print("Saving")
-    #sim_data = np.zeros_like(img_data)
-    #for i,p in enumerate(simsAB):
-    #    if p is None:
-    #        continue
-    #    sim_data[i] = p
-    #sim_data /= sim_data.max()
-    #sim_data *= 10000
-    #mn = sim_data[ sim_data > 0] .mean()
-    #sim_data += mn*0.1
-    #print("Sampling")
-    #noisy = np.random.poisson(sim_data)
-    #beam_dict = BEAM.to_dict()
-    #det_dict = DET.to_dict()
-    #beam_dict.pop("spectrum_energies")
-    #beam_dict.pop("spectrum_weights")
-    #writer = H5AttributeGeomWriter("some_cytos_shot%d.hdf5" % i_shot, image_shape=sh, num_images=4, \
-    #    		detector=det_dict, beam=beam_dict, detector_and_beam_are_dicts=True)
-    #writer.add_image(img_data)
-    #writer.add_image(img_data_copy)
-    #writer.add_image(noisy)
-    #writer.add_image(sim_data)
-    #writer.close_file()
+    if args.writeimages:
+        from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter
+        sh = img_data.shape
+        print("Saving")
+        sim_data = np.zeros_like(img_data)
+        for i,p in enumerate(simsAB):
+            if p is None:
+                continue
+            sim_data[i] = p
+        
+        if Gs is None:
+            sim_data /= sim_data.max()
+            sim_data *= 10000
+            mn = sim_data[ sim_data > 0] .mean()
+            sim_data += mn*0.1
+        else:
+            #from IPython import embed
+            #embed()
+            sim_data += background_image / 9.481
+            #readoutnoise = np.random.normal(0,3, (256, 254, 254))  
+            #sim_data += readoutnoise
+            
+        print("Sampling Poisson")
+        noisy = np.random.poisson(sim_data)*gain_noise
+        print("Sampling readout")
+        readoutnoise = np.random.normal(0,3, (256, 254, 254))  
+        noisy += readoutnoise
+
+        beam_dict = BEAM.to_dict()
+        det_dict = DET.to_dict()
+        beam_dict.pop("spectrum_energies")
+        beam_dict.pop("spectrum_weights")
+        writer = H5AttributeGeomWriter("some_cytos_shot%d.hdf5" % i_shot, image_shape=sh, num_images=4, \
+                            detector=det_dict, beam=beam_dict, detector_and_beam_are_dicts=True)
+        writer.add_image(img_data)
+        writer.add_image(img_data_copy)
+        writer.add_image(noisy)
+        writer.add_image(sim_data)
+        writer.close_file()
 
     shot_data += list(zip([i_shot]*len(cents), cents , cents_mm, i_refs ) )
 

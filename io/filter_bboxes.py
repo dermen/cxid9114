@@ -18,6 +18,7 @@ except ImportError:
     size = 1
 
 from IPython import embed
+import sys
 
 if rank == 0:
     from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
@@ -95,6 +96,9 @@ def main():
     resmin = args.reshigh  # high res cutoff
     resmax = args.reslow  # low res cutoff
     fnames = glob(args.glob)
+    if rank==0:
+        print("CMD looked like:")
+        print(" ".join(sys.argv))
 
     # NOTE: for reference, inside each h5 file there is
     #   [u'Amatrices', u'Hi', u'bboxes', u'h5_path']
@@ -138,7 +142,7 @@ def main():
     my_unique_fids = set([fidx for fidx, _ in my_shots])
     my_open_files = {fidx: h5py_File(fnames[fidx], "r") for fidx in my_unique_fids}
 
-    all_num_kept =0 
+    all_num_kept = 0 
     all_num_below = 0 
     Ntot = 0
     all_kept_bbox = []
@@ -187,6 +191,8 @@ def main():
 
         is_a_keeper = [in_reso_ring[i_spot] for i_spot in range(nspots)]
 
+        print("In reso: %d" % sum( is_a_keeper))
+
         hgroups = h.keys()
 
         if args.snrmin is not None:
@@ -204,6 +210,8 @@ def main():
                 s, b, var = map(array, zip(*int_data))
                 SNR = s / sqrt(var)
             is_a_keeper = [k and snr >= args.snrmin for k, snr in zip(is_a_keeper, SNR)]
+        
+        print("In reso and SNR: %d" % sum( is_a_keeper))
 
         if "tilt_rms" in hgroups:
             if args.tiltfilt is not None:
@@ -231,7 +239,7 @@ def main():
         else:
             if rank == 0:
                 print ("WARNING: indexed_flag not in hdf5 file")
-
+        
         if "is_on_boundary" in hgroups:
             if not args.onboundary:
                 on_boundary = h["is_on_boundary"]["shot%d" % shot_idx][()]

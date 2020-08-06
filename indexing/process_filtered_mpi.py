@@ -297,6 +297,7 @@ for i_shot in range(Nexper):
     exper.beam = BEAM
     exper.crystal = crystal
     exper.imageset = iset  # Exper.imageset
+    
 
     if not args.oldway:
         refls_predict = TiltPlanes.prep_relfs_for_tiltalization(refls_predict, exper=exper)
@@ -348,7 +349,6 @@ for i_shot in range(Nexper):
                 continue
             shoebox_roi, coefs, variance_matrix, Isum, varIsum, below_zero_flag, fit_sel = result
             if below_zero_flag and not args.keepbelowzero:
-                #print("Tilt plane dips below 0!")
                 continue
             else:
                 all_below_zero.append(below_zero_flag) 
@@ -363,6 +363,10 @@ for i_shot in range(Nexper):
             if args.savefitsel:
                 all_fit_sel.append(fit_sel)
             x1, x2, y1, y2 = shoebox_roi
+            YY,XX = np.indices((y2-y1, x2-x1))
+            #tiltz = XX*coefs[0] + YY*coefs[1] + coefs[2]
+            #if not args.keepbelowzero:
+            #    assert tiltz.min() > 0
             if x1 == 0 or y1 == 0 or x2 == fs_dim or y2 == ss_dim:
                 boundary_spot.append(True)
             else:
@@ -372,6 +376,7 @@ for i_shot in range(Nexper):
             reso = 1./np.linalg.norm(ref['rlp'])
             all_reso.append(reso)
 
+        
         chosen_selection = flex.bool([i in selected_ref_idx for i in range(n_predict)])
         refls_predict = refls_predict.select(chosen_selection)
         spot_snr = np.array(I_Leslie99) / np.sqrt(varI_Leslie99)
