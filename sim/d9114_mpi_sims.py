@@ -129,14 +129,14 @@ if args.use_rank_as_seed:
 else:
     if has_mpi:
         seeds = None
-        if rank==0:
+        if rank == 0:
             np.random.seed(args.seed)
             seeds = np.random.permutation(99999)
             seeds = list(seeds)
 
         seeds = comm.bcast(seeds, root=0)
         np.random.seed(seeds[comm.rank])
-        print ("Rank %d, seed %d" % (comm.rank, seeds[comm.rank]))
+        print("Rank %d, seed %d" % (comm.rank, seeds[comm.rank]))
     else:
         np.random.seed(args.seed)
 
@@ -224,7 +224,6 @@ shot_range = range(start, stop)
 
 
 for i_data in shot_range:
-    print(i_data, shot_range)
     flux_id = data_fluxes_idx[i_data]
     h5name = "%s_rank%d_data%d_fluence%d.h5" % (ofile, rank, i_data, flux_id)
     h5name = os.path.join(odirj, h5name)

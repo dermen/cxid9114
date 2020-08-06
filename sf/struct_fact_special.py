@@ -156,12 +156,27 @@ def write_multichannel_sfall(en_chans=None, output_name = None, pdb_name=None):
         h5_out.create_dataset("hall_symbol", data=F.space_group_info().type().hall_symbol())
 
 
-def load_sfall(fname):
+def write_sfall(lst_of_F, en_chans, output_name):
+    Fout = []
+    for F in lst_of_F:
+        Fout.append(F.data().as_numpy_array())
+
+    hkl = F.indices()  # at this point, should be same hkl list for all energy channels
+    hkl = np.vstack([hkl[i] for i in range(len(hkl))])
+    with h5py.File(output_name, "w") as h5_out:
+        h5_out.create_dataset("indices", data=hkl, dtype=np.int, compression="lzf")
+        h5_out.create_dataset("data", data=np.vstack(Fout), compression="lzf")
+        h5_out.create_dataset("energies", data=en_chans, compression="lzf")
+        h5_out.create_dataset("ucell_tuple", data=F.unit_cell().parameters(), compression="lzf")
+        h5_out.create_dataset("hall_symbol", data=F.space_group_info().type().hall_symbol())
+
+
+def load_sfall(fname, data_are_complex=True):
     """
     special script for loading the structure factor file generated in write_multichannel_sfall()
     :param fname: file generated in the write_multichannel_sfall method above.. 
     :return: mil_ar, energies
-        mil_ar: dict of miller arrays (complex) 
+        mil_ar: dict of miller arrays
         energies: array of xray energies in electron volts
         such that  mil_ar[0] is Fhkl at energy energies[0]
     """
@@ -171,7 +186,7 @@ def load_sfall(fname):
     indices_data = f["indices"][()]
     indices_for_flex = []  # make a list for flex constructor
     for hkl in indices_data:
-        h,k,l = map(int, hkl)  # cast to python int for Python 3
+        h,k,l = list(map(int, hkl))  # cast to python int for Python 3
         indices_for_flex.append( (h,k,l))
     hall = f["hall_symbol"][()]
     ucell_param = tuple(f["ucell_tuple"][()])
@@ -184,7 +199,10 @@ def load_sfall(fname):
 
     mil_ar = {}  # load a dict of "sfall at each energy"
     for i_chan, data_chan in enumerate(data):
-        data_flex = flex.complex_double(np.ascontiguousarray(data_chan))
+        if data_are_complex:
+            data_flex = flex.complex_double(np.ascontiguousarray(data_chan))
+        else:
+            data_flex = flex.double(np.ascontiguousarray(data_chan))
         mil_ar[i_chan] = miller.array(mil_set, data=data_flex)
 
     return mil_ar, energies

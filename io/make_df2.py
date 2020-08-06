@@ -43,8 +43,12 @@ if args.addMasterInfo:
 
 Norig = len(df)
 
-n_ncells_param = len(df["ncells"].values[0])
-ncells_vals = list(zip(*df.ncells.values))
+try:
+    n_ncells_param = len(df["ncells"].values[0])
+    ncells_vals = list(zip(*df.ncells.values))
+except TypeError:
+    n_ncells_param = 1
+    ncells_vals = list(df.ncells.values)
 ncells_cols = []
 for i_ncells in range(n_ncells_param):
     col_name = "ncells%d" %i_ncells

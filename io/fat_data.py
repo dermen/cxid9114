@@ -31,6 +31,7 @@ if rank == 0:
     parser = ArgumentParser("Load and refine bigz")
     parser.add_argument("--readoutless", action="store_true")
     parser.add_argument("--badgeom", action="store_true")
+    parser.add_argument("--optgeom", action="store_true")
     parser.add_argument("--checkbackground", action="store_true")
     parser.add_argument("--checkbackgroundsavename",default="_fat_data_background_residual_file", type=str, help="name of the residual background image")
     parser.add_argument("--protocol", choices=["per_shot", "global"], default="per_shot", type=str, help="refinement protocol")
@@ -136,6 +137,7 @@ if rank == 0:
     parser.add_argument("--savepickleonly", action="store_true")
     parser.add_argument("--perturbfcell", default=None, type=float)
     parser.add_argument("--bgextracted", action="store_true")
+    parser.add_argument("--savemodels", action="store_true")
 
     args = parser.parse_args()
     print("ARGS:")
@@ -172,6 +174,8 @@ if rank == 0:
     from simtbx.diffBragg.refiners import RefineAllMultiPanel
     if args.badgeom:
         from cxid9114.geom.multi_panel import CSPAD2 as CSPAD
+    elif args.optgeom:
+        from cxid9114.geom.opt import CSPAD
     else:
         from cxid9114.geom.multi_panel import CSPAD
     from cctbx.array_family import flex
@@ -515,6 +519,9 @@ class GlobalData:
             #    readoutless_path = npz_path.replace("tang", "bear")
             #    img_handle = numpy_load(readoutless_path)
             else:
+                if args.readoutless:
+                    npz_path = npz_path.replace(".npz", ".readoutless.npz")
+                    print("READOULESSNESSNKASKJDKJASKDJKAJS!!!!!!!!!!!!!!!!<><><><><><><")
                 if PY3:
                     img_handle = numpy_load(npz_path, allow_pickle=True)
                 else:
@@ -1059,7 +1066,8 @@ class GlobalData:
             all_crystal_scales=self.all_crystal_scales,
             perturb_fcell=args.perturbfcell,
             global_ncells=args.globalNcells, global_ucell=args.globalUcell,
-            shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)},
+            #shot_originZ_init= {img_num:CSPAD[0].get_origin()[2] for img_num in range(self.n_shots)},
+            shot_originZ_init= {img_num:0 for img_num in range(self.n_shots)},
             shot_bg_coef=self.all_bg_coef, background_estimate=self.background_estimate)
         
         self.i_trial = i_trial
@@ -1082,6 +1090,7 @@ class GlobalData:
         self.RUC.x_init = x_init
         self.RUC.only_pass_refined_x_to_lbfgs = args.xrefinedonly
         self.RUC.bg_extracted = args.bgextracted
+        self.RUC.save_model = args.savemodels 
         
         self.RUC.recenter = args.recenter
         # parameter rescaling...
@@ -1114,6 +1123,9 @@ class GlobalData:
 
         # plot things
         self.RUC.sigma_r = 3./args.gainval
+        #if args.readoutless:
+        #    self.RUC.sigma_r = 2 
+        
         self.RUC.gradient_only=args.gradientonly
         self.RUC.fix_params_with_negative_curvature = args.forcecurva
         #self.RUC.stpmax = args.stpmax
@@ -1158,7 +1170,7 @@ class GlobalData:
         self.RUC.calc_curvatures = args.curvatures
         self.RUC.poisson_only = args.poissononly
         self.RUC.plot_stride = args.stride
-        self.RUC.trad_conv_eps = args.tradeps #5e-10  # NOTE this is for single panel model
+        self.RUC.trad_conv_eps = args.tradeps  #5e-10  # NOTE this is for single panel model
         self.RUC.verbose = False
         self.RUC.use_rot_priors = False
         self.RUC.use_ucell_priors = False
