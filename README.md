@@ -18,7 +18,7 @@ module load cgpu gcc openmpi cuda # on NERSC only
 nvcc --version
 
 mkdir ~/Crystal
-cd ~/Crsytal
+cd ~/Crystal
 wget https://raw.githubusercontent.com/cctbx/cctbx_project/master/libtbx/auto_build/bootstrap.py
 # if you arent doing a GPU build, then remove the config-flags argument
 python bootstrap.py --builder=dials --use-conda --nproc=4 --config-flags="--enable_cuda" --python=38
@@ -51,7 +51,7 @@ libtbx.run_tests_parallel nproc=4 module=simtbx
 Now grab the cxid9114 repo
 
 ```bash
-cd ~/Crsytal/modules # its important to place it in the modules folder
+cd ~/Crystal/modules # its important to place it in the modules folder
 git clone https://github.com/dermen/cxid9114.git
 # install git-lfs (if on nersc, just load the module
 cd ~/Crystal/modules/cxid9114
