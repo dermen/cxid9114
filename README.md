@@ -1,96 +1,129 @@
-## D9114 instructions on CORI
+# Manuscript work
+---
 
-This is tested on SUSE linux:
+## Install CCTBX (optionally with CUDA support)
 
-```
-$ lsb_release  -a
-LSB Version:	n/a
-Distributor ID:	openSUSE
-Description:	openSUSE Leap 15.0
-Release:	15.0
-Codename:	n/a
-```
+The below is for the NERSC GPU nodes, but it could easily be adapted to fit your local environment. 
 
-### STEP 1
-Download/install a copy of go language
+##### Build sources
 
+Grab the bootstrap script and execute bootstrap with any modern python interpreter
 
 ```
-mkdir ~/install_go
-cd ~/install_go
-wget https://dl.google.com/go/go1.12.7.linux-amd64.tar.gz
-tar -xzvf go1.12.7.linux-amd64.tar.gz
-export PATH=$PATH:~/install_go/go/bin
-```
-### STEP 2
-Install git lfs (large file storage)
+# For GPU builds
+module load cgpu gcc openmpi cuda # on NERSC only
+# Verify nvcc is in your path
+nvcc --version
 
-```
-cd # go to a home directory
-go get github.com/git-lfs/git-lfs
-export PATH=$PATH:~/go/bin
+mkdir ~/Crystal
+cd ~/Crsytal
+# if you arent doing a GPU build, then remove the config-flags argument
+python bootstrap.py --builder=dials --use-conda --nproc=4 --config-flags="--enable_cuda" --python=38
 ```
 
-### STEP 3
-Clone cxid9114 and bring in big files
+This should create some sub-folders modules (contains the sources) build (contains the setup script). 
+
+##### Test the build
 
 ```
-cd # home directory
+# this sets up your environment to use CCTBX  and DIALS
+source ~/Crystal/setpaths.sh
+```
+
+You can test the installation
+
+```
+mkdir ~/Crystal/test
+cd ~/Crystal/test
+libtbx.run_tests_parallel nproc=4 module=simtbx
+```
+
+##### Install the repository for the manuscript work
+
+Now grab the cxid9114 repo
+
+```
+cd ~/Crsytal/modules # its important to place it in the modules folder
 git clone https://github.com/dermen/cxid9114.git
-cd ~/cxid9114
-git lfs install --local
+# install git-lfs (if on nersc, just load the module
+module load git-lfs
+cd ~/Crystal/modules/cxid9114
+git lfs install
 git lfs fetch
-git lfs pull
+git pull # this should bring some extra file content needed for the simulations
 ```
 
-### STEP 4
-Build cctbx with nvcc enabled in a working directory, e.g. ```~/crystal``` 
+##### Adding some extra python modules
 
 ```
-source ~/crystal/build/setpaths.sh
+litbx.python -m pip install pandas jupyter
+libtbx.refresh
+libtbx.ipython # launch an interactive python shell
 ```
 
-Then link the cxid9114 repo to cctbx and configure it
+##### Install the image format
+
+Multi-panel images simulated with nanoBragg are saved in a custom-written format (```simtbx.nanoBragg.utils.H5AttributeGeomWriter```). The format is simple: the images are stored as 3D hdf5 datasets, and the dxtbx detector and beam models are converted to json strings and stored in the hdf5 dataset attribute field. The format reader can be installed as follows:
 
 ```
-ln -s ~/cxid9114 ~/crystal/modules/cxid9114
-libtbx.configure cxid9114
+cd ~/Crystal/modules/cxid9114/format
+dxtbx.install_format  -u FormatHDF5AttributeGeometry.py
 ```
 
-### STEP 5
-Histogram the spectra from their raw format to a 1eV spacing:
+##### Install and test mpi4py
 
 ```
-cd ~/cxid9114/spec
-libtbx.python hist_spec.py
+# Assuming mpicc is in your path (brought in on NERSC with the openmpi module shown above)
+CC=gcc MPICC=mpicc libtbx.python -m pip install -v --no-binary mpi4py mpi4py
 ```
 
-Compute structure factors for each energy channel in the histogrammed spectra:
+Test the mpi4py build by running the script below
 
 ```
-cd ~/cxid9114/sf
-libtbx.python struct_fact_special.py
+# store this in a script called ~/test_mpi.py
+from mpi4py import MPI
+import socket
+mpi_rank = MPI.COMM_WORLD.Get_rank()
+mpi_size = MPI.COMM_WORLD.Get_size()
+print(mpi_rank, mpi_size, socket.gethostname())
 ```
 
-### Step 6
-Install format class for reading simulated images
+using mpirun (or srun on a nersc compute node)
 
 ```
-cd ~/cxid9114/format
-dxtbx.install_format -u FormatBigSimD9114.py
+srun -N2 -n2 -c2 libtbx.python ~/test_mpi.py
 ```
 
-### Step 7
-Access a CORI GPU node
 
+## Simulating the images
+
+In order to simlulate an image, run the python script
+
+##### Make a background image
 ```
-# Log into CORI
-$ ssh -i ~/.ssh/nersc -Y rand_al_thor@cori.nersc.gov
-$ salloc  -C gpu -c 10 -t 10 -A m1759 --gres=gpu:1 -N 1
-salloc: Granted job allocation 196284
-salloc: Waiting for resource configuration
-salloc: Nodes cgpu01 are ready for job
+libtbx.python d9114_mpi_sims.py  -odir . --bg-name mybackground.h5 --make-background   --sad 
 ```
 
-### Notes
-If you want to push to the cxid9114 repo, you will always have to put ```git-lfs``` in your path (see e.g. step 2 above)
+You can view the background after installing the necessary dxtbx format class
+
+```
+dials.image_viewer mybackground.h5
+```
+
+
+##### Make the diffracton patterns
+
+Below is a script that can run on a PC:
+
+```
+libtbx.python d9114_mpi_sims.py  -o test -odir some_images --add-bg --add-noise --profile gauss --bg-name mybackground.h5 -trials 2  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 1 --mos_spread_deg 0.01  --saveh5 --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115
+```
+
+To generate the two images (indicated by ```-trials 2```) it took 2min 40sec on a macbook. The images simulated for the paper included ```--mos_doms 50```, so expect that to take 50x longer to simulate. We generated all images for the paper on a GPU node at the NERSC supercomputer. If you built CCTBX with cuda enabled, then you can also run the GPU simulation by adding the arguments ```-g 1  --gpu```, where ```-g``` specifies the number of GPU devices. This will make simulating the images much faster! Also, the script can by run using MPI, parallelizing over images. The full command used at NERSC (20 MPI ranks utilizing 8 devices) was 
+
+```
+srun -n 20 -c 2 libtbx.python d9114_mpi_sims.py  -o test -odir some_images --add-bg --add-noise --profile gauss --bg-name mybackground.h5 -trials 2000  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 50 --mos_spread_deg 0.01  --saveh5 --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115 -g 8 --gpu
+```
+
+MPI Rank 0 will monitor GPU usage by periodically printing the result of nvidia-smi to the screen. 
+
