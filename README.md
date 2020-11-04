@@ -1,5 +1,7 @@
 # Manuscript work
----
+
+For the work presented in [Beyond integration: modeling every pixel to obtain better structure factors from stills, IUCrJ Nov. 2020](https://doi.org/10.1107/S2052252520013007)
+
 
 ## Install CCTBX (optionally with CUDA support)
 
@@ -17,6 +19,7 @@ nvcc --version
 
 mkdir ~/Crystal
 cd ~/Crsytal
+wget https://raw.githubusercontent.com/cctbx/cctbx_project/master/libtbx/auto_build/bootstrap.py
 # if you arent doing a GPU build, then remove the config-flags argument
 python bootstrap.py --builder=dials --use-conda --nproc=4 --config-flags="--enable_cuda" --python=38
 ```
@@ -95,35 +98,33 @@ srun -N2 -n2 -c2 libtbx.python ~/test_mpi.py
 ```
 
 
-## Simulating the images
-
-In order to simlulate an image, run the python script
+# Simulating the images
 
 ##### Make a background image
+
 ```
 libtbx.python d9114_mpi_sims.py  -odir . --bg-name mybackground.h5 --make-background   --sad 
 ```
 
-You can view the background after installing the necessary dxtbx format class
+You can view the background after installing the necessary dxtbx format class (as shown above)
 
 ```
 dials.image_viewer mybackground.h5
 ```
 
-
 ##### Make the diffracton patterns
 
-Below is a script that can run on a PC:
+Below is a script that can run on a PC to generate 2 diffraction images:
 
 ```
 libtbx.python d9114_mpi_sims.py  -o test -odir some_images --add-bg --add-noise --profile gauss --bg-name mybackground.h5 -trials 2  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 1 --mos_spread_deg 0.01  --saveh5 --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115
 ```
 
-To generate the two images (indicated by ```-trials 2```) it took 2min 40sec on a macbook. The images simulated for the paper included ```--mos_doms 50```, so expect that to take 50x longer to simulate. We generated all images for the paper on a GPU node at the NERSC supercomputer. If you built CCTBX with cuda enabled, then you can also run the GPU simulation by adding the arguments ```-g 1  --gpu```, where ```-g``` specifies the number of GPU devices. This will make simulating the images much faster! Also, the script can by run using MPI, parallelizing over images. The full command used at NERSC (20 MPI ranks utilizing 8 devices) was 
+To generate the two images (indicated by ```-trials 2```) it took 2min 40sec on a macbook. The images simulated for the paper included ```--mos_doms 50```, so expect that to take 50x longer to simulate. We generated all images for the paper on a GPU node at the NERSC supercomputer. If you built CCTBX with cuda enabled, then you can also run the GPU simulation by adding the arguments ```-g 1  --gpu```, where ```-g``` specifies the number of GPU devices on the compute node. This will make simulating the images much faster. Also, the script can by run using MPI, parallelizing over images. The full command used at NERSC (1 compute node with 20 MPI ranks utilizing 8 GPUs) was 
 
 ```
 srun -n 20 -c 2 libtbx.python d9114_mpi_sims.py  -o test -odir some_images --add-bg --add-noise --profile gauss --bg-name mybackground.h5 -trials 2000  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 50 --mos_spread_deg 0.01  --saveh5 --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115 -g 8 --gpu
 ```
 
-MPI Rank 0 will monitor GPU usage by periodically printing the result of nvidia-smi to the screen. 
+MPI Rank 0 will monitor GPU usage by periodically printing the result of nvidia-smi to the screen.
 
