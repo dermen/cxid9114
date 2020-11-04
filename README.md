@@ -54,6 +54,7 @@ Now grab the cxid9114 repo
 cd ~/Crsytal/modules # its important to place it in the modules folder
 git clone https://github.com/dermen/cxid9114.git
 # install git-lfs (if on nersc, just load the module
+cd ~/Crystal/modules/cxid9114
 module load git-lfs
 cd ~/Crystal/modules/cxid9114
 git lfs install
@@ -108,6 +109,7 @@ srun -N2 -n2 -c2 libtbx.python ~/test_mpi.py
 ### Make a background image
 
 ```bash
+cd ~/Crystal/modules/cxid9114/sim
 libtbx.python d9114_mpi_sims.py  -odir . --bg-name mybackground.h5 --make-background   --sad 
 ```
 
