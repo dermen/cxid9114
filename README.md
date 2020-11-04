@@ -26,10 +26,10 @@ python bootstrap.py --builder=dials --use-conda --nproc=4 --config-flags="--enab
 
 This should create some sub-folders: 
 
-1. **~/Crystal/modules** (contains the sources), 
-2. **~/Crystal/build** (contains the setup script and build files), 
-3. **~/Crystal/mc3** (conatains the conda install, assuming no other conda was in the path, and/or no miniconda install folders were found in the home directory, ```source ~/Crystal/mc3/etc/profile.d/conda.sh```)
-4. **~/Crystal/conda_base** (contains the conda environment, can be activated using ```conda activate ~/Crystal/conda_base```, but thats not necessary to use CCTBX or DIALS) 
+* **~/Crystal/modules** (contains the sources), 
+* **~/Crystal/build** (contains the setup script and build files), 
+* **~/Crystal/mc3** (conatains the conda install, assuming no other conda was in the path, and/or no miniconda install folders were found in the home directory, ```source ~/Crystal/mc3/etc/profile.d/conda.sh```)
+* **~/Crystal/conda_base** (contains the conda environment, can be activated using ```conda activate ~/Crystal/conda_base```, but thats not necessary to use CCTBX or DIALS) 
 
 ### Test the build
 
