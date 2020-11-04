@@ -7,7 +7,7 @@ For the work presented in [Beyond integration: modeling every pixel to obtain be
 
 The below is for the NERSC GPU nodes, but it could easily be adapted to fit your local environment. 
 
-##### Build sources
+### Build sources
 
 Grab the bootstrap script and execute bootstrap with any modern python interpreter
 
@@ -26,7 +26,7 @@ python bootstrap.py --builder=dials --use-conda --nproc=4 --config-flags="--enab
 
 This should create some sub-folders modules (contains the sources) build (contains the setup script). 
 
-##### Test the build
+### Test the build
 
 ```bash
 # this sets up your environment to use CCTBX  and DIALS
@@ -41,7 +41,7 @@ cd ~/Crystal/test
 libtbx.run_tests_parallel nproc=4 module=simtbx
 ```
 
-##### Install the repository for the manuscript work
+### Install the repository for the manuscript work
 
 Now grab the cxid9114 repo
 
@@ -56,7 +56,7 @@ git lfs fetch
 git pull # this should bring some extra file content needed for the simulations
 ```
 
-##### Adding some extra python modules
+### Adding some extra python modules
 
 ```bash
 litbx.python -m pip install pandas jupyter
@@ -64,7 +64,7 @@ libtbx.refresh
 libtbx.ipython # launch an interactive python shell
 ```
 
-##### Install the image format
+### Install the image format
 
 Multi-panel images simulated with nanoBragg are saved in a custom-written format (```simtbx.nanoBragg.utils.H5AttributeGeomWriter```). The format is simple: the images are stored as 3D hdf5 datasets, and the dxtbx detector and beam models are converted to json strings and stored in the hdf5 dataset attribute field. The format reader can be installed as follows:
 
@@ -73,7 +73,7 @@ cd ~/Crystal/modules/cxid9114/format
 dxtbx.install_format  -u FormatHDF5AttributeGeometry.py
 ```
 
-##### Install and test mpi4py
+### Install and test mpi4py
 
 ```bash
 # Assuming mpicc is in your path (brought in on NERSC with the openmpi module shown above)
@@ -100,7 +100,7 @@ srun -N2 -n2 -c2 libtbx.python ~/test_mpi.py
 
 # Simulating the images
 
-##### Make a background image
+### Make a background image
 
 ```bash
 libtbx.python d9114_mpi_sims.py  -odir . --bg-name mybackground.h5 --make-background   --sad 
@@ -112,7 +112,7 @@ You can view the background after installing the necessary dxtbx format class (a
 dials.image_viewer mybackground.h5
 ```
 
-##### Make the diffracton patterns
+### Make the diffracton patterns
 
 Below is a script that can run on a PC to generate 2 diffraction images:
 
