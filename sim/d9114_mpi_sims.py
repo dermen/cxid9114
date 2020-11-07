@@ -44,7 +44,6 @@ parser.add_argument("--ucelljitter", type=float, default=0, help="sigma of the t
 parser.add_argument("--timesimulations", action="store_true")
 parser.add_argument("--profile", dest="profile", type=str, default=None,
                     choices=["gauss", "round", "square", "tophat"], help="shape of spots determined with this")
-parser.add_argument("--cspad", action="store_true")
 parser.add_argument("--startidx", type=int, default=0, help="which index in the mastter flux array to begin")
 parser.add_argument("--make-background", dest='make_bg', action='store_true',
                     help="Just make the background image and quit")
@@ -66,13 +65,12 @@ parser.add_argument("--Ncells", type=float, default=15)
 parser.add_argument("--xtal_size_mm", type=float, default=None)
 parser.add_argument("--mos_spread_deg", type=float, default="0.01")
 parser.add_argument("--mos_doms", type=int, default=100)
-parser.add_argument("--cbf",action="store_true", help="simulate single panel image on a CBF")
 parser.add_argument("--xtal_size_jitter", type=float, default=None)
 
 args = parser.parse_args()
 
-if rank==0:
-    print (args)
+if rank == 0:
+    print(args)
 
 profile = args.profile
 cuda = args.gpu
@@ -105,7 +103,6 @@ import os
 import sys
 import h5py
 import numpy as np
-from cxid9114 import utils
 from simtbx.nanoBragg import shapetype, nanoBragg
 from scitbx.array_family import flex
 from dxtbx.model.crystal import CrystalFactory
@@ -116,13 +113,12 @@ from cxid9114.utils import random_rotation
 from cxid9114.sim import sim_utils
 # from cxid9114.refine.jitter_refine import make_param_list
 from cxid9114.geom.single_panel import DET, BEAM
-if args.cspad:  # use a cspad for simulation
-    from cxid9114.geom.multi_panel import CSPAD
-    # from dxtbx.model import Panel
-    # put this new CSPAD in the same plane as the single panel detector (originZ)
-    for pid in range(len(CSPAD)):
-        CSPAD[pid].set_trusted_range(DET[0].get_trusted_range())
-    DET = CSPAD
+from cxid9114.geom.multi_panel import CSPAD
+# from dxtbx.model import Panel
+# put this new CSPAD in the same plane as the single panel detector (originZ)
+for pid in range(len(CSPAD)):
+    CSPAD[pid].set_trusted_range(DET[0].get_trusted_range())
+DET = CSPAD
 
 if args.use_rank_as_seed:
     np.random.seed(rank)
@@ -144,9 +140,8 @@ sim_path = os.path.dirname(sim_utils.__file__)
 
 spectra_filename = args.spectrafile
 if spectra_filename is None:
-    try:
-        spectra_filename = os.path.join(sim_path, "../spec/bs7_100kspec.h5")
-    except IOError:
+    spectra_filename = os.path.join(sim_path, "../spec/bs7_100kspec.h5")
+    if not os.path.exists(spectra_filename):
         print("Default spectra File does not exists: %s. Aborting. See spec/make_specs.py" % spectra_filename)
         sys.exit()
 
@@ -168,8 +163,7 @@ if args.sad:
     if args.p9:
         data_sf = struct_fact_special.load_p9()
     elif args.bs7 or args.bs7real:
-        #data_sf = utils.open_flex("../sf/bs7_real_scaled.pkl")
-        data_sf = struct_fact_special.sfgen(WAVELEN_HIGH, 
+        data_sf = struct_fact_special.sfgen(WAVELEN_HIGH,
             "./4bs7.pdb", 
             yb_scatter_name="../sf/scanned_fp_fdp.tsv")
         data_sf = data_sf.as_amplitude_array()
@@ -196,7 +190,7 @@ if args.mad:
 beamsize_mm = np.sqrt(np.pi * (beam_diam_mm / 2) ** 2)
 
 data_fluxes_idx = np.array_split(np.arange(data_fluxes_all.shape[0]), size)[rank]
-a, b, c, _, _, _ = data_sf[0].unit_cell().parameters()
+a_init, b_init, c_init, _, _, _ = data_sf[0].unit_cell().parameters()
 hall = data_sf[0].space_group_info().type().hall_symbol()
 # Each rank (worker)  gets its own output directory
 odir = args.odir
@@ -204,11 +198,12 @@ odirj = os.path.join(odir, "job%d" % rank)
 if not os.path.exists(odirj):
     os.makedirs(odirj)
 
-if add_background and not make_background :
+if add_background and not make_background:
     assert args.bg_name is not None
-    background = h5py.File(args.bg_name, "r")['bigsim_d9114'][()]
-    if args.cspad:
-        assert background.shape == (64, 185, 194)
+    import dxtbx
+    background = np.array([panel.as_numpy_array() for panel in dxtbx.load(args.bg_name).get_raw_data(0)])
+    #background = h5py.File(args.bg_name, "r")['bigsim_d9114'][()]
+    assert background.shape == (64, 185, 194)
 
 print("Rank %d Begin" % rank)
 start = 0
@@ -275,9 +270,8 @@ for i_data in shot_range:
         else:
             data_fluxes = np.array([ave_flux_across_exp])
     
-
-    a = np.random.normal(a, args.ucelljitter)
-    c = np.random.normal(c, args.ucelljitter)
+    a = np.random.normal(a_init, args.ucelljitter)
+    c = np.random.normal(c_init, args.ucelljitter)
     cryst_descr = {'__id__': 'crystal',  # its al,be,ga = 90,90,90
                    'real_space_a': (a, 0, 0),
                    'real_space_b': (0, a, 0),
@@ -306,7 +300,7 @@ for i_data in shot_range:
     # the following will override some parameters
     # to aid simulation of a background image using same pipeline
     if make_background:
-        print("Rank %d: MAKING BACKGROUND : just at two colors" % rank)
+        print("Rank %d: MAKING BACKGROUND:" % rank)
         data_fluxes = [ave_flux_across_exp]
         data_energies = [parameters.ENERGY_HIGH]  # should be 8944 and 9034
         data_sf = [1]  # dont care about structure factors when simulating background water scatter
@@ -413,22 +407,13 @@ for i_data in shot_range:
             from IPython import embed
             embed()
 
-        if args.cspad:
-            assert simsDataSum.shape == (64, 185, 194)
+        assert simsDataSum.shape == (64, 185, 194)
 
     if make_background:
-        if args.cspad:
-            bg_out = h5py.File(args.bg_name, "w")
-            bg_out.create_dataset("bigsim_d9114", data=simsDataSum)
-            np.savez("testbg.npz", img=simsDataSum,
-                     det=DET.to_dict(),
-                     beam=BEAM.to_dict())
-        else:
-            bg_out = h5py.File(args.bg_name, "w")
-            bg_out.create_dataset("bigsim_d9114", data=simsDataSum[0])
-            np.savez("testbg_mono.npz", img=simsDataSum[0],
-                     det=DET.to_dict(),
-                     beam=BEAM.to_dict())
+        from simtbx.nanoBragg.utils import H5AttributeGeomWriter
+        with H5AttributeGeomWriter(args.bg_name, image_shape=simsDataSum.shape,
+                                       detector=DET, beam=BEAM, num_images=1) as writer:
+            writer.add_image(simsDataSum)
         print ("Rank %d: Background made! Saved to file %s" % (rank, args.bg_name))
         # force an exit here if making a background...
         sys.exit()
@@ -438,10 +423,7 @@ for i_data in shot_range:
         # TODO consider varying the background level to simultate jet thickness jitter
         bg_scale = sum(data_fluxes) / ave_flux_across_exp
         print("Rank %d: ADDING BG with scale of %f" % (rank,bg_scale))
-        if args.cspad:
-            simsDataSum += background * bg_scale
-        else:
-            simsDataSum[0] += background * bg_scale
+        simsDataSum += background * bg_scale
 
     if add_noise:
         print("Rank %d: ADDING NOISE" % rank)
@@ -492,33 +474,27 @@ for i_data in shot_range:
             SIM.free_all()
             del SIM
 
-    if args.cbf or args.saveh5 or args.savenpz:
+    if args.saveh5 or args.savenpz:
 
-        print( "Rank %d: SAVING DAFILE" % rank)
-        if args.cbf:
-            assert not args.cspad
-            SIM = nanoBragg(detector=DET, beam=BEAM)
-            SIM.raw_pixels = flex.double(simsDataSum[0].astype(np.float64))
-            cbfname = "%s_rank%d_data%d_fluence%d.cbf" % (ofile, rank, i_data, flux_id)
-            cbfname = os.path.join(odirj, cbfname)
-            SIM.to_cbf(cbfname)
+        print("Rank %d: SAVING DAFILE" % rank)
+        #if args.cbf:
+        #    assert not args.cspad
+        #    SIM = nanoBragg(detector=DET, beam=BEAM)
+        #    SIM.raw_pixels = flex.double(simsDataSum[0].astype(np.float64))
+        #    cbfname = "%s_rank%d_data%d_fluence%d.cbf" % (ofile, rank, i_data, flux_id)
+        #    cbfname = os.path.join(odirj, cbfname)
+        #    SIM.to_cbf(cbfname)
 
-        if args.cspad:
-            data_array = simsDataSum.astype(np.float64)
-        else:
-            data_array = simsDataSum[0].astype(np.float64)
+        data_array = simsDataSum.astype(np.float64)
         if args.savenpz:
             np.savez(h5name + ".npz",
                      img=data_array,
                      det=DET.to_dict(), beam=BEAM.to_dict())
         if args.saveh5:
-            from two_color.hdf5_attribute_geom_writer import H5AttributeGeomWriter, add_spectra_to_file
-            #img_h5name = "%s_rank%d_data%d_fluence%d.img.h5" % (ofile, rank, i_data, flux_id)
-            #img_h5name = os.path.join(odirj, img_h5name)
-            with H5AttributeGeomWriter(filename=h5name, image_shape=data_array.shape, num_images=1, 
+            from simtbx.nanoBragg.utils import H5AttributeGeomWriter
+            with H5AttributeGeomWriter(filename=h5name, image_shape=data_array.shape, num_images=1,
                             detector=DET, beam=BEAM, dtype=np.float64) as WRITER:
                 WRITER.add_image(data_array)
-            add_spectra_to_file( h5name, energies=[data_energies], weights=[data_fluxes])
 
         # save the shots simulation parameter data
         open_flag = "w"

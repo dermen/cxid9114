@@ -232,11 +232,8 @@ def load_4bs7_sf():
     hpos = []
     hneg = []
     for H in hcommon:
-        
-        
         fneg = Fhkl[H] -  Fdiff[H]
         if fneg < 0:
-            print ("Oops neg")
             continue
         
         H_neg = -H[0], -H[1], -H[2]
