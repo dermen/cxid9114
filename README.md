@@ -59,7 +59,7 @@ module load git-lfs
 cd ~/Crystal/modules/cxid9114
 git lfs install
 git lfs fetch
-git pull # this should bring some extra file content needed for the simulations
+git lfs pull # this should bring some extra file content needed for the simulations
 ```
 
 ### Adding some extra python modules
@@ -135,3 +135,147 @@ srun -n 20 -c 2 libtbx.python d9114_mpi_sims.py  -o test -odir some_images --add
 
 MPI Rank 0 will monitor GPU usage by periodically printing the result of nvidia-smi to the screen.
 
+The simulated images can be opened with the DIALS image viewer. Note, the spots are large - this is because we intensionally simulated small mosaic domains in order to reduce aliasing errors that arise for Bragg spots that are much smaller than the solid angle subtended by a pixel. In such a case, one needs to increase the oversample factor to ensure proper sampling within each pixel, however this adds to the overall computational time (increasing the oversample from e.g. 1 to 5 incurs a 125x [!] increase in run-time).  
+
+
+# Process the images with DIALS
+
+## Indexing and integration
+
+We will index and integrate the images using ```dials.stills_process```. 
+
+```
+cd /path/to/some_images
+dials.stills_process process.phil  job*/test_*.h5 mp.nproc=5 output.output_dir=~/Crystal/index
+```
+
+where process.phil is a file that contains the following lines of text
+
+```
+spotfinder.threshold.algorithm=dispersion
+spotfinder.threshold.dispersion.gain=28
+spotfinder.threshold.dispersion.global_threshold=40
+spotfinder.threshold.dispersion.kernel_size=[2,2]
+spotfinder.threshold.dispersion.sigma_strong=1
+spotfinder.threshold.dispersion.sigma_background=6
+spotfinder.filter.min_spot_size=2
+
+indexing.method=fft1d
+indexing.known_symmetry.unit_cell=79.1,79.1,38.4,90,90,90
+indexing.known_symmetry.space_group=P43212
+indexing.stills.set_domain_size_ang_value=500
+
+integration.summation.detector_gain=28
+```
+
+Indexing will output reflection files and experiment files. For a detailed discription of these files, see the references by Brewster linked to in the manuscript. Here, we use the parameter ```set_domain_size_ang_value``` in order to intentionally over-predict the diffraction pattern. These over-predictions will provide more information for the diffBragg refinement. 
+
+## Merge the data
+
+To merge the data, run the command
+
+```
+mkdir ~/Crystal/merge # make an output folder for merge results
+srun  -n5 -c2 cctbx.xfel.merge merge.phil input.path=~/Crystal/index output.output_dir=~/Crystal/merge
+```
+
+where ```merge.phil``` is a text file containing the merging parameters:
+
+```
+input.parallel_file_load.method=uniform
+filter.algorithm=unit_cell
+filter.unit_cell.value.target_unit_cell=79.1,79.1,38.4,90,90,90
+filter.unit_cell.value.target_space_group=P43212
+filter.unit_cell.value.relative_length_tolerance=0.02
+filter.outlier.min_corr=-1.0
+select.algorithm=significance_filter
+scaling.unit_cell=79.1,79.1,38.4,90,90,90
+scaling.space_group=P43212
+scaling.algorithm=mark1
+scaling.resolution_scalar=0.96
+postrefinement.enable=False
+postrefinement.algorithm=rs
+merging.d_min=2
+merging.merge_anomalous=False
+merging.set_average_unit_cell=True
+merging.error.model=errors_from_sample_residuals
+statistics.n_bins=10
+output.do_timing=True
+output.log_level=1
+```
+
+The merge result is now in ```~/Crystal/merge/iobs_all.mtz```, and the log file containing merge statistics is ```~/Crystal/merge/iobs_main.log```.
+
+# Process the images with diffBragg
+
+The program diffBragg is currently part of a feature branch of CCTBX. It is actively under development, and ultimately it will be merged into the master branch of CCTBX. For now, if you wish to use diffBragg, you must checkout the feature branch (this instructional will be updated once diffBragg is moved into CCTBX master):
+
+```
+cd ~/Crystal/modules/cctbx_project
+git checkout diffBragg
+cd ~/Crystal/build
+make
+
+# go to an empty test folder and run the tests
+cd ~/Crystal/tests
+libtbx.run_tests_parallel module=simtbx nproc=5
+```
+
+If you configured CCTBX to use enable CUDA *as shown above* then you can test the GPU functionality. There is a single environment variable to turn this on, see below.
+
+## Process with simtbx.diffBragg.stage_one
+
+```
+srun -n40 -c2 simtbx.diffBragg.stage_one  ~/Crystal/index/idx-*integrated.refl some_images_indexed/idx-*integrated.expt  stage_one.phil  save.pandas=True save.reflections=True save.experiments=True output.directory=some_images_indexed_optimized max_calls=[100,100] usempi=True 
+```
+
+where the files ```~/Crystal/index/idx-*integrated.refl``` are the integration files produced by dials.stills_process, and the phil file contains the following
+
+```
+roi.shoebox_size = 15
+roi.fit_tilt = True
+roi.reject_edge_reflections = False
+roi.pad_shoebox_for_background_estimation=0
+refiner.refine_Umatrix = [0,1]
+refiner.refine_ncells = [1,0]
+refiner.refine_spot_scale = [1,0]
+refiner.refine_Bmatrix = [0,1]
+refiner.max_calls = [1000, 1000]
+refiner.sensitivity.unitcell = [.1, .1, .1, .1, .1, .1]
+refiner.sensitivity.rotXYZ = [.01, .01, .01]
+refiner.sensitivity.spot_scale = 1
+refiner.sensitivity.ncells_abc = [.1,.1, .1]
+refiner.ncells_mask = 111
+refiner.tradeps = 1e-20
+refiner.verbose = 0
+refiner.sigma_r = 3
+refiner.adu_per_photon = 28
+simulator.crystal.has_isotropic_ncells = True
+simulator.structure_factors.mtz_name = iobs_all.mtz 
+simulator.structure_factors.mtz_column = "Iobs(+),SIGIobs(+),Iobs(-),SIGIobs(-)"
+simulator.crystal.ncells_abc = 15,15,15
+simulator.init_scale = 1e5
+simulator.beam.size_mm = 0.001
+```
+
+Note, the file ```iobs_all.mtz``` is the merge output from running ```cctbx.xfel.merge```, as shown above. It is the initial guess of the structure factors.  
+
+## Optional GPU support for diffBragg
+
+This is still in early development, but GPU acceleration can help in cases where one includes a full spectrum in the modeling. Assuming you configured CCTBX with cuda support (as shown above), from a clean test folder you can
+
+```
+export DIFFBRAGG_USE_CUDA=1
+libtbx.run_tests_parallel module=simtbx nproc=1
+unset DIFFBRAGG_USE_CUDA # IMPORTANT!
+```
+
+You will notice a handfull of tests fail, and that is ok, as they require curvature analysis which is currently not supported using the GPU. Note, the flag ```DIFFBRAGG_USE_CUDA``` is not fully supported, and there is better ways to control GPU usage, for example
+
+```
+# D is a diffBragg instance (in python)
+D.use_cuda = True  # will try to use GPU acceleration wherever possible
+D.gpu_free()  # frees allocated GPU memory
+```
+
+Also, the script ```simtbx.diffBragg.stage_one``` accepts a ```use_cuda=True``` flag
