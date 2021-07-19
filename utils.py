@@ -288,7 +288,15 @@ def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symb
         F2 = miller.array(miller_set=miller_set, data=F2).set_observation_type_xray_amplitude()
 
     if sort_flex:
-        F1 = F1.select_indices(F2.indices())
+        indices_common = set(F1.indices()).intersection(F2.indices())
+        indices_common = flex.miller_index(list(indices_common))
+        F1 = F1.select_indices(indices_common)
+        F2_mset = F1.miller_set(indices_common, F2.anomalous_flag())
+        F2_map = {h:d for h,d in zip(F2.indices(), F2.data())}
+        F2_data = flex.double([F2_map[h] for h in indices_common])
+        F2 = miller.array(F2_mset, F2_data)
+        #F2 = F2.select_indices(indices_common)
+        #F1 = F1.select_indices(F2.indices())
         F1=F1.sort(by_value='packed_indices')
         F2=F2.sort(by_value='packed_indices')
 
@@ -305,6 +313,7 @@ def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symb
             if verbose:
                 print("Scale optimization failed, using scale factor=1")
 
+    return r1_scale
     ret = F1.r1_factor(F2, scale_factor=r1_scale)
     if verbose:
         print("R-factor: %.4f" % ret)

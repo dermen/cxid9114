@@ -63,6 +63,7 @@ git lfs install
 git lfs fetch
 git lfs pull # this should bring some extra file content needed for the simulations
 
+# this might not be necessary anymore but just in case:
 cd ~/Crystal/modules 
 git clone https://github.com/dermen/tilt_fit.git
 ```
@@ -70,6 +71,7 @@ git clone https://github.com/dermen/tilt_fit.git
 ### Adding some extra python modules
 
 ```bash
+libtbx.python -m pip install hdf5plugin. # might be needed to view images
 litbx.python -m pip install pandas jupyter
 libtbx.refresh
 libtbx.ipython # launch an interactive python shell
@@ -159,7 +161,7 @@ srun -n 20 -c 2 libtbx.python d9114_mpi_sims.py  -o test -odir some_images --add
 MPI Rank 0 will monitor GPU usage by periodically printing the result of nvidia-smi to the screen.
 
 The simulated images can be opened with the DIALS image viewer. Note, the spots are large - this is because we 
-intensionally simulated small mosaic domains in order to reduce aliasing errors that arise for Bragg spots that are much smaller than the solid angle subtended by a pixel. In such a case, one needs to increase the oversample factor to ensure proper sampling within each pixel, however this adds to the overall computational time (increasing the oversample from e.g. 1 to 5 incurs a 125x [!] increase in run-time).  
+intentionally simulated small mosaic domains in order to reduce aliasing errors that arise for Bragg spots that are much smaller than the solid angle subtended by a pixel. In such a case, one needs to increase the oversample factor to ensure proper sampling within each pixel, however this adds to the overall computational time (increasing the oversample from e.g. 1 to 5 incurs a 125x [!] increase in run-time). 
 
 
 # Process the images with DIALS
@@ -350,7 +352,7 @@ from cxid9114.sf import struct_fact_special
 from cxid9114.parameters import WAVELEN_HIGH
 Famp = struct_fact_special.sfgen(WAVELEN_HIGH, "4bs7.pdb", dmin=1.9, yb_scatter_name="scanned_fp_fdp.tsv")
 Famp = Famp.as_amplitude_array()
-mtz = Famp.as_mtz_dataset().mtz_object()
+mtz = Famp.as_mtz_dataset(column_root_label="F").mtz_object()
 mtz.write("cxid9114_grndtruth.mtz")
 ```
 
@@ -378,6 +380,7 @@ refiner.adu_per_photon = 28
 refiner.stage_two.print_reso_bins = True
 refiner.stage_two.merge_stat_freq = 1
 refiner.stage_two.Fref_mtzname = cxid9114_grndtruth.mtz
+refiner.stage_two.Fref_mtzname = "F(+),F(-)"
 simulator.crystal.has_isotropic_ncells = True
 simulator.structure_factors.mtz_name = some_images_merged/iobs_all.mtz 
 simulator.structure_factors.mtz_column = "Iobs(+),SIGIobs(+),Iobs(-),SIGIobs(-)"
