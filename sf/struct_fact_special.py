@@ -219,11 +219,18 @@ def load_4bs7_sf():
     reader = f.file_content()
     if reader is None:
         raise ValueError("Be sure to install git lfs and pull in the actual file with 4bs7-sf.cif")
-    F = reader.build_miller_arrays()["r4bs7sf"]['_refln.F_meas_au_1']
+    try:
+        F = reader.build_miller_arrays()["r4bs7sf"]['_refln.F_meas_au_1']
+    except KeyError:
+        F = reader.build_miller_arrays()["r4bs7sf"]['_refln.F_meas_au']
     Symm = F.crystal_symmetry()
     Fhkl = {h: val for h, val in zip(F.indices(), F.data())}
-    
-    Fd = reader.build_miller_arrays()['r4bs7sf']['_refln.pdbx_anom_difference_1']
+
+    try:
+        Fd = reader.build_miller_arrays()['r4bs7sf']['_refln.pdbx_anom_difference_1']
+    except:
+        Fd = reader.build_miller_arrays()['r4bs7sf']['_refln.pdbx_anom_difference']
+
     Fdiff = {h: val for h, val in zip(Fd.indices(), Fd.data())} 
     
     hcommon = set(Fhkl.keys()).intersection(set(Fdiff.keys())) 
