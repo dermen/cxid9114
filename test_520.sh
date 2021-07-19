@@ -9,15 +9,15 @@ libtbx.python make_sf_reference.py --prefix test520
 
 # SIMULATE
 cd $D91/sim
-srun -n 1 -c 2 libtbx.python ./d9114_mpi_sims.py  -o test_520 -odir $DUMP --add-bg --add-noise --profile gauss --bg-name test_520_background.h5 --make-background --cspad  -trials 1  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 1 --mos_spread_deg 0 --savenpz --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115 --savenoiseless --forcemono --savereadoutless
+srun -n 1 -c 2 libtbx.python ./d9114_mpi_sims.py  -o test_520 -odir $DUMP --add-bg --add-noise --profile gauss --bg-name test_520_background.h5 --make-background  -trials 1  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 1 --mos_spread_deg 0 --savenpz --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115 --savenoiseless --forcemono --savereadoutless
 
-time srun -n 40 -c 2 ./d9114_mpi_sims.py  -o test_520 -odir $DUMP  --add-bg --add-noise --profile gauss --bg-name test_520_background.h5 --cspad  -trials 13  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 1 --mos_spread_deg 0 --savenpz --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115 --savenoiseless --forcemono --savereadoutless
+time srun -n 40 -c 2 ./d9114_mpi_sims.py  -o test_520 -odir $DUMP  --add-bg --add-noise --profile gauss --bg-name test_520_background.h5  -trials 13  --oversample 0 --Ncells 10 --xtal_size_mm 0.00015 --mos_doms 1 --mos_spread_deg 0 --savenpz --readout  --masterscale 1150 --sad --bs7real --masterscalejitter 115 --savenoiseless --forcemono --savereadoutless
 
 cd $D91/indexing
 dials.stills_process tutorial.phil $DUMP/job*/*.h5.npz mp.nproc=40 output.output_dir=$DUMP/index
 
 cd $D91/merge
-./merge.sh  1 $DUMP/merge  $DUMP/index/
+./merge.sh  1 $DUMP/merge  $DUMP/index/ 32
 
 cd $D91/sf
 libtbx.python Fmtz_to_Fpkl.py  --input $DUMP/merge/001/out/001_all.mtz --output test_520_cpu_mark1.pkl --reference test520_real.pkl --referenceForCCano test520_CCano.pkl
