@@ -3,7 +3,10 @@ import numpy as np
 from dials.array_family import flex
 from scitbx.matrix import sqr
 from cxid9114.integrate import integrate_utils
-
+from dxtbx.imageset import MemReader
+from dxtbx.imageset import ImageSet, ImageSetData
+from dxtbx.model.experiment_list import ExperimentListFactory
+from dxtbx.model import ExperimentList
 
 def refls_by_panelname(refls):
     Nrefl = len(refls)
@@ -297,7 +300,119 @@ def strong_spot_mask(refl_tbl, detector):
     return is_strong_pixel
 
 
-def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids=None, **kwargs):
+class FormatInMemory:
+    """
+    this class is a special image type
+    necessary to create dxtbx imagesets and
+    datablocks from numpy array images
+    and masks.
+    """
+    def __init__(self, image, mask=None):
+        self.image = image
+        if image.dtype != np.float64:
+            self.image = self.image.astype(np.float64)
+        if mask is None:
+            self.mask = np.ones_like(self.image).astype(np.bool)
+        else:
+            assert (mask.shape == image.shape)
+            assert(mask.dtype == bool)
+            self.mask = mask
+
+    def get_raw_data(self):
+        if len(self.image.shape)==2:
+            return flex.double(self.image)
+        else:
+            return tuple([flex.double(panel) for panel in self.image])
+
+    def get_mask(self, goniometer=None):
+        if len(self.image.shape)==2:
+            return flex.bool(self.mask)
+        else:
+            return tuple([flex.bool(panelmask) for panelmask in self.mask])
+
+
+
+
+def explist_from_numpyarrays(image, detector, beam, mask=None):
+    """
+    So that one can do e.g.
+    >> dblock = datablock_from_numpyarrays( image, detector, beam)
+    >> refl = flex.reflection_table.from_observations(dblock, spot_finder_params)
+    without having to utilize the harddisk
+    :param image:  numpy array image, or list of numpy arrays
+    :param mask:  numpy mask, should be same shape format as numpy array
+    :param detector: dxtbx detector model
+    :param beam: dxtbx beam model
+    :return: datablock for the image
+    """
+    if isinstance( image, list):
+        image = np.array( image)
+    if mask is not None:
+        if isinstance( mask, list):
+            mask = np.array(mask).astype(bool)
+    I = FormatInMemory(image=image, mask=mask)
+    reader = MemReader([I])
+    iset_Data = ImageSetData(reader, None) # , masker)
+    iset = ImageSet(iset_Data)
+    iset.set_beam(beam)
+    iset.set_detector(detector)
+    explist = ExperimentListFactory.from_imageset_and_crystal(iset, None)
+    return explist
+
+
+def refls_from_sims(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids=None,
+                    max_spot_size=1000, **kwargs):
+    """
+    This is for converting the centroids in the noiseless simtbx images
+    to a multi panel reflection table
+    :param panel_imgs: list or 3D array of detector panel simulations
+    :param detector: dxtbx  detector model of a caspad
+    :param beam:  dxtxb beam model
+    :param thresh: threshol intensity for labeling centroids
+    :param filter: optional filter to apply to images before
+        labeling threshold, typically one of scipy.ndimage's filters
+    :param pids: panel IDS , else assumes panel_imgs is same length as detector
+    :param kwargs: kwargs to pass along to the optional filter
+    :return: a reflection table of spot centroids
+    """
+    from dials.algorithms.spot_finding.factory import FilterRunner
+    from dials.model.data import PixelListLabeller, PixelList
+    from dials.algorithms.spot_finding.finder import pixel_list_to_reflection_table
+
+    if panel_ids is None:
+        panel_ids = np.arange(len(detector))
+    pxlst_labs = []
+    for i, pid in enumerate(panel_ids):
+        plab = PixelListLabeller()
+        img = panel_imgs[i]
+        if filter is not None:
+            mask = filter(img, **kwargs) > thresh
+        else:
+            mask = img > thresh
+        img_sz = detector[int(pid)].get_image_size()  # for some reason the int cast is necessary in Py3
+        flex_img = flex.double(img)
+        flex_img.reshape(flex.grid(img_sz))
+
+        flex_mask = flex.bool(mask)
+        flex_mask.resize(flex.grid(img_sz))
+        pl = PixelList(0, flex.double(img), flex.bool(mask))
+        plab.add(pl)
+
+        pxlst_labs.append(plab)
+
+    El = explist_from_numpyarrays(panel_imgs, detector, beam)
+    iset = El.imagesets()[0]
+    refls = pixel_list_to_reflection_table(
+        iset, pxlst_labs,
+        min_spot_size=1,
+        max_spot_size=max_spot_size,  # TODO: change this ?
+        filter_spots=FilterRunner(),  # must use a dummie filter runner!
+        write_hot_pixel_mask=False)[0]
+
+    return refls
+
+
+def refls_from_sims_OLD(panel_imgs, detector, beam, thresh=0, filter=None, panel_ids=None, **kwargs):
     """
     This class is for converting the centroids in the noiseless simtbx images
     to a multi panel reflection table

@@ -62,6 +62,9 @@ cd ~/Crystal/modules/cxid9114
 git lfs install
 git lfs fetch
 git lfs pull # this should bring some extra file content needed for the simulations
+
+cd ~/Crystal/modules 
+git clone https://github.com/dermen/tilt_fit.git
 ```
 
 ### Adding some extra python modules
