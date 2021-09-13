@@ -36,13 +36,17 @@ class FormatTwoColorH5(FormatHDF5, FormatStill):
             keys = img_handle.keys()
         except (IOError, AttributeError) as err:
             return False
-        if "raw" not in keys:
+        if "imagesLD91" not in keys:
+            print("no image")
             return False
         if "gain" not in keys:
+            print("no gain")
             return False
         if "dark" not in keys:
+            print("no dark")
             return False
         if "mask" not in keys:
+            print("no mask")
             return False
         return True
 
@@ -53,7 +57,7 @@ class FormatTwoColorH5(FormatHDF5, FormatStill):
         FormatStill.__init__(self, image_file, **kwargs)
         self._handle = h5py.File(image_file, "r")
         # load image components
-        self._raw_panels = self._handle["raw"]
+        self._raw_panels = self._handle["imagesLD91"]
         self._is_low_gain = self._handle["gain"][()]
         self._pedestal = self._handle["dark"][()]
         self._mask = self._handle["mask"][()]
