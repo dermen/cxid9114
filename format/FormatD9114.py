@@ -36,6 +36,7 @@ class FormatD9114(FormatHDF5, FormatStill):
         return True
 
     def _start(self):
+        self._ENERGY_CONV = 12398.419739640716
         self._handle = h5py.File(self._image_file, "r")
         self._image_dset = self._handle["images"]
         self._geometry_define()
@@ -43,7 +44,6 @@ class FormatD9114(FormatHDF5, FormatStill):
         self._weights = None
         self._central_wavelengths = None
         self._load_per_shot_spectra()
-        self._ENERGY_CONV = 12398.419739640716
 
     def _geometry_define(self):
         det_str = self._image_dset.attrs["dxtbx_detector_string"]

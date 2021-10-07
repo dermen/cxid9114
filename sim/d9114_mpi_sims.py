@@ -163,9 +163,10 @@ if args.sad:
     if args.p9:
         data_sf = struct_fact_special.load_p9()
     elif args.bs7 or args.bs7real:
+        script_dir = os.path.dirname(__file__)
         data_sf = struct_fact_special.sfgen(WAVELEN_HIGH,
-            "./4bs7.pdb", 
-            yb_scatter_name="../sf/scanned_fp_fdp.tsv")
+            os.path.join(script_dir, "./4bs7.pdb"),
+            yb_scatter_name=os.path.join(script_dir, "../sf/scanned_fp_fdp.tsv"))
         data_sf = data_sf.as_amplitude_array()
     else:
         data_sf = struct_fact_special.load_4bs7_sf()
@@ -410,11 +411,14 @@ for i_data in shot_range:
         assert simsDataSum.shape == (64, 185, 194)
 
     if make_background:
+
         from simtbx.nanoBragg.utils import H5AttributeGeomWriter
-        with H5AttributeGeomWriter(args.bg_name, image_shape=simsDataSum.shape,
+        bgout = os.path.join(odir, args.bg_name)
+        with H5AttributeGeomWriter(bgout, image_shape=simsDataSum.shape,
                                        detector=DET, beam=BEAM, num_images=1) as writer:
             writer.add_image(simsDataSum)
-        print ("Rank %d: Background made! Saved to file %s" % (rank, args.bg_name))
+
+        print ("Rank %d: Background made! Saved to file %s" % (rank, bgout))
         # force an exit here if making a background...
         sys.exit()
 

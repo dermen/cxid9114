@@ -272,20 +272,8 @@ def make_diff_array(F_mill):
     return diff_mill
 
 
-def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symbol="P43212",
-                     anom=True, d_min=2, d_max=999, is_flex=False, optimize_scale=True, diff_mill=True,
-                     verbose=True, sort_flex=False, n_bin=None):
-
-    if not is_flex:
-        assert Hi_index is not None
-        sgi = sgtbx.space_group_info(symbol=symbol)
-        symm = symmetry(unit_cell=ucell, space_group_info=sgi)
-        Hi_index = make_flex_indices(Hi_index)
-        F1 = flex.double(F1)
-        F2 = flex.double(F2)
-        miller_set = symm.miller_set(Hi_index, anomalous_flag=anom)
-        F1 = miller.array(miller_set=miller_set, data=F1).set_observation_type_xray_amplitude()
-        F2 = miller.array(miller_set=miller_set, data=F2).set_observation_type_xray_amplitude()
+def compute_r_factor(F1, F2, d_min=2, d_max=999, is_flex=False, optimize_scale=True, diff_mill=True,
+                     verbose=True, sort_flex=True, n_bin=None, use_binning=False):
 
     if sort_flex:
         indices_common = set(F1.indices()).intersection(F2.indices())
@@ -313,17 +301,23 @@ def compute_r_factor(F1, F2, Hi_index=None, ucell=(79, 79, 38, 90, 90, 90), symb
             if verbose:
                 print("Scale optimization failed, using scale factor=1")
 
-    return r1_scale
-    ret = F1.r1_factor(F2, scale_factor=r1_scale)
+    if use_binning:
+        assert n_bin is not None
+        F1.setup_binner(d_max, d_min, n_bins=n_bin)
+    ret = F1.r1_factor(F2, scale_factor=r1_scale, use_binning=use_binning)
     if verbose:
-        print("R-factor: %.4f" % ret)
+        if use_binning:
+            ret.show()
+        else:
+            print("R-factor: %.4f" % ret)
+
 
     # compute CCanom
     if diff_mill:
         F1 = make_diff_array(F1)
         F2 = make_diff_array(F2)
 
-        ccanom = F1.correlation(F2)
+        ccanom = F1.correlation(F2)#, use_binning=use_binning)
         if verbose:
             print("CCanom: ")
             ccanom.show_summary()
@@ -422,8 +416,8 @@ def pppg(shot_, gain, mask=None, window_length=101, polyorder=5,
     low_gain_pid = np.where([ np.any( is_low[i] ) for i in range(32)])[0]
     high_gain_pid = np.where([ np.any( is_high[i] ) for i in range(32)])[0]
 
-    bins_low = np.linspace(low_x1, low_x2, Nlow)
-    bins_high = np.linspace(high_x1,high_x2,Nhigh)
+    bins_low = np.linspace(low_x1, low_x2, int(Nlow))
+    bins_high = np.linspace(high_x1,high_x2,int(Nhigh))
 
     xdata_low = bins_low[1:]*.5 + bins_low[:-1]*.5
     xdata_high = bins_high[1:]*.5 + bins_high[:-1]*.5
