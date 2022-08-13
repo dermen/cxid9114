@@ -5,6 +5,7 @@ parser.add_argument("input", type=str, help="input concat pandas pickles from ho
 parser.add_argument("outdir", type=str, help="output folder")
 parser.add_argument("--prefix", type=str, help="output file prefix", default="mergy-poo")
 parser.add_argument("--thresh", default=5, type=float, help="outlier intensity threshold (amongst ASU equivalents")
+parser.add_argument("--maxProc", default=None, type=int),
 parser.add_argument("--nbins", default=15, type=int, help="number of resolution bins for merge stats")
 parser.add_argument("--minSNR", default=0, type=float, help="min signal to noise for a spot")
 parser.add_argument("--minVar", default=1e-7, type=float, help="min variance for spot to merge")
@@ -12,19 +13,74 @@ parser.add_argument("--maxVar", default=1e12, type=float, help="max variance for
 parser.add_argument("--minMeas", default=3, type=int, help="minimum multiplicity")
 parser.add_argument("--weighted", action="store_true")
 parser.add_argument("--median", action="store_true")
+parser.add_argument("--maxSigZ", type=float, default=2.1)
+parser.add_argument("--minSigZ", type=float, default=0.8)
+parser.add_argument("--minNiter", type=int, default=500)
+parser.add_argument("--reference", type=str, default=None, help="path to .npz from previous merge")
 parser.add_argument("--halvesOnly", action="store_true")
 ARGS = parser.parse_args()
 
 import pandas
+from cctbx import miller, crystal
+from scipy.stats import linregress
+from dials.array_family import flex
 import os
 from simtbx.diffBragg import utils
 import numpy as np
 import sys
+from simtbx.diffBragg.utils import ENERGY_CONV
+from scipy.optimize import minimize
 from itertools import groupby
 from libtbx.mpi4py import MPI
-import cc_merge
+from cxid9114 import cc_merge
 
 COMM = MPI.COMM_WORLD
+
+
+def print0(*args, **kwargs):
+    if COMM.rank==0:
+        #if "flush" in list(kwargs.keys()):
+        #    kwargs['flush'] = True
+        print(*args, **kwargs)
+
+
+def scale_to_reference(merge_data, reference_data, i_chan=0, how='lsq'):
+
+    data_h, data_I, data_varI = zip(*merge_data)
+    ref_I = [reference_data[i_chan][h] for h in data_h if h in reference_data[i_chan]]
+    data_in_ref_I = [data_I[i_h] for i_h, h in enumerate(data_h) if h in reference_data[i_chan]]
+
+    ref_I = np.array(ref_I)
+    data_in_ref_I = np.array(data_in_ref_I)
+
+    sel = ~utils.is_outlier(data_in_ref_I, )
+
+    if how=='nelder-mead':
+        def func_min(p, ref_I, data_I):
+            scale = p[0]
+            resid = ref_I - scale * data_I
+            return np.sum(resid ** 2)
+
+        out = minimize(func_min, x0=np.array([1]), args=(ref_I[sel], data_in_ref_I[sel]), method='Nelder-Mead')
+        if not out.success:
+            # fall back to least sq
+            scale = (data_in_ref_I * ref_I)[sel].sum() / (data_in_ref_I ** 2)[sel].sum()
+        else:
+            scale = out.x[0]
+
+        if scale<0:
+            print("Bad scale factor! Zeroing out shot")
+            scale = 0
+    elif how=='lsq':
+        scale = (data_in_ref_I*ref_I)[sel].sum() / (data_in_ref_I**2)[sel].sum()
+    else:
+        scale = 1
+
+    data_h = [h for i_h, h in enumerate(data_h) if sel[i_h]]
+    data_I = [scale*d for i_d, d in enumerate(data_I) if sel[i_d]]
+    data_varI = [scale**2*d for i_d, d in enumerate(data_varI) if sel[i_d]]
+    merge_data = list(zip(data_h, data_I, data_varI))
+    return merge_data
 
 
 def correct_I(hkl, scale, scale_var, Flookup):
@@ -55,7 +111,10 @@ def merge_intensities(_I, _varI, thresh=ARGS.thresh, minvar=ARGS.minVar, maxvar=
     I = I[sel]
     varI = varI[sel]
 
-    inliers = ~utils.is_outlier(I, thresh)
+    if len(I) == 1:
+        inliers = np.ones(1, bool)
+    else:
+        inliers = ~utils.is_outlier(I, thresh)
     if not np.any(inliers):
         return None
 
@@ -137,7 +196,7 @@ def get_overlaps(df):
             if COMM.rank==0:
                 nbad = len(overlap_hkls)
                 frac_bad = nbad / ave_num_hkl *100.
-                print("basename %s has %d xtals and %d (%.2f%%) bad hkls= " % (g, nxtal, nbad, frac_bad), overlap_hkls)
+                print0("basename %s has %d xtals and %d (%.2f%%) bad hkls= " % (g, nxtal, nbad, frac_bad), overlap_hkls)
             overlaps.append( [g, overlap_hkls])
 
     overlaps = COMM.reduce(overlaps)
@@ -147,8 +206,7 @@ def get_overlaps(df):
     return overlaps
 
 
-
-def main(df, outname, overlaps):
+def main(df, outname, overlaps, reference=None):
     mtz_name = "/global/cfs/cdirs/lcls/dermen/d9114_data/merging/merge2/iobs_all.mtz"
     mtz_column = "Iobs,SIGIobs"
     Famp = utils.open_mtz(mtz_name, mtz_column)
@@ -156,6 +214,13 @@ def main(df, outname, overlaps):
     Famp = Famp.generate_bijvoet_mates()
 
     Flookup = {h: val for h, val in zip(Famp.indices(), Famp.data())}
+
+    reference_data = None
+    if reference is not None:
+        reference_data = {}
+        for i_chan in [0,1]:
+            ref_h, ref_I, _,_ = np.load(reference, allow_pickle=True)["merge%d" % i_chan].T
+            reference_data[i_chan] = {val_h: val_I for val_h, val_I in zip(ref_h, ref_I)}
 
     merge0, merge1 = [], []
     for i_f, (f, bname) in enumerate(zip(df.opt_exp_name, df.basename)):
@@ -184,80 +249,70 @@ def main(df, outname, overlaps):
                 scale_var = scale_var[keep_hkls]
 
             merge_data = correct_I(hkl, scale, scale_var, Flookup)
+            if reference_data is not None:
+                merge_data = scale_to_reference(merge_data, reference_data, i_chan)
             if i_chan == 0:
                 merge0 += merge_data
             else:
                 merge1 += merge_data
         # if i_f==200#:
         #    break
-        if COMM.rank == 0:
-            print("Loaded and corrected intensities %d/%d" % (i_f + 1, len(df)), flush=True)
+        print0("Loaded and corrected intensities %d/%d" % (i_f + 1, len(df)), flush=True)
 
-    if COMM.rank == 0:
-        print("reducing", flush=True)
+    print0("reducing", flush=True)
 
-    if COMM.rank==0:
-        print("unzipp", flush=True)
+    print0("unzipp", flush=True)
     h0,scale0, scale_var0 = zip(*merge0)
     h0 = COMM.gather(h0)
     scale0 = COMM.gather(scale0)
     scale_var0 = COMM.gather(scale_var0)
-    if COMM.rank==0:
-        print("unzipp", flush=True)
+    print0("unzipp", flush=True)
     h1, scale1, scale_var1 = zip(*merge1)
     h1 = COMM.gather(h1)
     scale1 = COMM.gather(scale1)
     scale_var1 = COMM.gather(scale_var1)
 
     if COMM.rank==0:
-        print("stack", flush=True)
+        print0("stack", flush=True)
         h0 = np.vstack(h0)
-        print("stack", flush=True)
+        print0("stack", flush=True)
         scale0 = np.hstack(scale0)
-        print("stack", flush=True)
+        print0("stack", flush=True)
         scale_var0 = np.hstack(scale_var0)
-        print("stack", flush=True)
+        print0("stack", flush=True)
         h1 = np.vstack(h1)
-        print("stack", flush=True)
+        print0("stack", flush=True)
         scale1 = np.hstack(scale1)
-        print("stack", flush=True)
+        print0("stack", flush=True)
         scale_var1 = np.hstack(scale_var1)
 
-    if COMM.rank==0:
-        print("broadcast", flush=True)
+    print0("broadcast", flush=True)
     h0 = COMM.bcast(h0)
-    if COMM.rank==0:
-        print("broadcast", flush=True)
+    print0("broadcast", flush=True)
     scale0 = COMM.bcast(scale0)
-    if COMM.rank==0:
-        print("broadcast", flush=True)
+    print0("broadcast", flush=True)
     scale_var0 = COMM.bcast(scale_var0)
 
     h1 = COMM.bcast(h1)
     scale1 = COMM.bcast(scale1)
     scale_var1 = COMM.bcast(scale_var1)
 
-    if COMM.rank==0:
-        print("zipping", flush=True)
+    print0("zipping", flush=True)
     h0 = list(map(tuple, h0))
     merge0 = zip(h0, scale0, scale_var0)
-    if COMM.rank==0:
-        print("zipping", flush=True)
+    print0("zipping", flush=True)
     h1 = list(map(tuple, h1))
     merge1 = zip(h1, scale1, scale_var1)
     #merge0 = COMM.bcast(COMM.reduce(merge0))
     #merge1 = COMM.bcast(COMM.reduce(merge1))
-    if COMM.rank == 0:
-        print("done reducing", flush=True)
+    print0("done reducing", flush=True)
 
-    if COMM.rank == 0:
-        print("groupby 0", flush=True)
+    print0("groupby 0", flush=True)
     sort_key = lambda x: x[0]
     gb0 = groupby(sorted(merge0, key=sort_key), key=sort_key)
     merge_info0 = {k: [(I, I_var) for _, I, I_var in v] for k, v in gb0}
 
-    if COMM.rank == 0:
-        print("groupby 1", flush=True)
+    print0("groupby 1", flush=True)
     gb1 = groupby(sorted(merge1, key=sort_key), key=sort_key)
     merge_info1 = {k: [(I, I_var) for _, I, I_var in v] for k, v in gb1}
 
@@ -280,23 +335,20 @@ def main(df, outname, overlaps):
             else:
                 merge_results1.append((h, mergeI, errorI, numI))
 
-            if COMM.rank == 0:
-                print(
-                    "Channel %d: merged successfully %1.4e, %1.4e, %d/%d" % (i_chan, mergeI, errorI, i_h + 1, num_hkl),
-                    flush=True)
+            print0(
+                "Channel %d: merged successfully %1.4e, %1.4e, %d/%d" % (i_chan, mergeI, errorI, i_h + 1, num_hkl),
+                flush=True)
 
     merge_results0 = COMM.reduce(merge_results0)
     merge_results1 = COMM.reduce(merge_results1)
 
+    print0("Saving results!")
     if COMM.rank == 0:
-        print("Saving results!")
         np.savez(outname, merge0=merge_results0, merge1=merge_results1)
-        print("Donezo!")
+    print0("Donezo!")
 
 
 def compute_completeness(merge_f, n_bins=15, log_f=None, channel=0,a=78.97, c=38.12):
-    from cctbx import sgtbx, miller, crystal
-    from dials.array_family import flex
     sym = crystal.symmetry((a,a,c,90,90,90), "P43212")
     h,_,_,_ = np.load(merge_f, allow_pickle=True)['merge%d' % channel].T
     h = np.vstack(h).astype(np.int32)
@@ -304,12 +356,74 @@ def compute_completeness(merge_f, n_bins=15, log_f=None, channel=0,a=78.97, c=38
     mset = miller.set(sym, hflex, True)
     mset.setup_binner(n_bins=n_bins)
     comp = mset.completeness(use_binning=True)
-    print("COMPLETENESS for %s in channel %d:" % (merge_f,channel), file=log_f)
+    print0("COMPLETENESS for %s in channel %d:" % (merge_f,channel), file=log_f)
     comp.show(f=log_f)
 
 
+def convert_to_mtz(merge_f, a=78.97, c=38.2):
+    sym = crystal.symmetry((a,a,c,90,90,90), "P43212")
+    mtz_name = merge_f.replace(".npz", "_channel%d.mtz")
+
+    for i_chan in [0,1]:
+        if i_chan==0:
+            wave = ENERGY_CONV / 8944.
+        else:
+            wave = ENERGY_CONV / 9034
+
+        h,I,errorI,mult = np.load(merge_f, allow_pickle=True )["merge%d" %i_chan].T
+        I = np.ascontiguousarray(I).astype(np.float64)
+        errorI = np.ascontiguousarray(errorI).astype(np.float64)
+        h = np.vstack(h).astype(np.int32)
+        hflex = flex.miller_index(list(map(tuple, h)))
+        mset = miller.set(sym, hflex, True)
+        ma = miller.array(mset, data=flex.double(I), sigmas=flex.double(errorI))
+        ma = ma.set_observation_type_xray_intensity()
+        ma.as_mtz_dataset(column_root_label="I", wavelength=wave).mtz_object().write(mtz_name % i_chan)
+
+
+def merge_trial(outdir, prefix, reference=None, halvesOnly=False, nbins=15):
+    even_f = os.path.join(outdir, prefix + "_even.npz")
+    odd_f = os.path.join(outdir, prefix + "_odd.npz")
+    all_f = os.path.join(outdir, prefix + "_all.npz")
+
+    ## DO MERGES ##
+    main(df1, even_f, overlaps, reference)
+    main(df2, odd_f, overlaps, reference)
+
+    if COMM.rank==0:
+        for i_chan in [0, 1]:
+            d, cchalf, ccstar, dmin, dmax, overall_cc = cc_merge.cc_merge(even_f, odd_f, i_chan, nbins)
+            cc_table = cc_merge.get_table(dmin, dmax, cchalf, ccstar)
+            cc_figname = os.path.join(outdir, prefix + "_cc_merge_chan%d.png" % i_chan)
+            cc_merge.plot_cc(d, cchalf, ccstar, cc_figname)
+            logname = os.path.join(outdir, "merge_chan%d.log" % i_chan)
+            with open(logname, "w") as o:
+                compute_completeness(even_f, nbins, log_f=o, channel=i_chan)
+                compute_completeness(odd_f, nbins, log_f=o, channel=i_chan)
+                o.write("Working directory: %s\n" % os.getcwd())
+                o.write("Command line input:\n %s\n" % " ".join(sys.argv))
+                o.write(cc_table + "\n")
+                o.write("Overall: CC1/2=%.2f, CC*=%.2f\n" % (overall_cc[0], overall_cc[1]))
+
+    if not halvesOnly:
+        main(df, all_f, overlaps, reference)
+        if COMM.rank == 0:
+            complete_logname = os.path.join(outdir, "merge_all_complete.log" )
+            with open(complete_logname, "w") as o:
+                compute_completeness(all_f, nbins, log_f=o, channel=0)
+                compute_completeness(all_f, nbins, log_f=o, channel=1)
+            convert_to_mtz(all_f)
+
+
 if __name__ == "__main__":
-    df = pandas.read_pickle(ARGS.input)
+    if ARGS.maxProc is not None:
+        df = pandas.read_pickle(ARGS.input).iloc[:ARGS.maxProc]
+    else:
+        df = pandas.read_pickle(ARGS.input)
+
+    print0("Before filtering sigz,niter,null: number of records=%d" % len(df))
+    df = df.loc[df.sigz.notnull()].query("%f < sigz < %f" %(ARGS.minSigZ, ARGS.maxSigZ)).query("niter>%f" % ARGS.minNiter).reset_index(drop=True)
+    print0("After filtering sigz,niter,null: number of records=%d" % len(df))
     overlaps = get_overlaps(df)
     n = len(df)
     m = n // 2
@@ -328,35 +442,4 @@ if __name__ == "__main__":
         if not os.path.exists(ARGS.outdir):
             os.makedirs(ARGS.outdir)
     COMM.barrier()
-
-    even_f = os.path.join(ARGS.outdir, ARGS.prefix + "_even.npz")
-    odd_f = os.path.join(ARGS.outdir, ARGS.prefix + "_odd.npz")
-    all_f = os.path.join(ARGS.outdir, ARGS.prefix + "_all.npz")
-
-    ## DO MERGES ##
-    main(df1, even_f, overlaps)
-    main(df2, odd_f, overlaps)
-    if not ARGS.halvesOnly:
-        main(df, all_f, overlaps)
-    ## DONE MERGES ##
-
-    if COMM.rank == 0:
-        if not ARGS.halvesOnly:
-            complete_logname = os.path.join(ARGS.outdir, "merge_all_complete.log" )
-            with open(complete_logname, "w") as o:
-                compute_completeness(all_f, ARGS.nbins, log_f=o, channel=0)
-                compute_completeness(all_f, ARGS.nbins, log_f=o, channel=1)
-
-        for i_chan in [0, 1]:
-            d, cchalf, ccstar, dmin, dmax, overall_cc = cc_merge.cc_merge(even_f, odd_f, i_chan, ARGS.nbins)
-            cc_table = cc_merge.get_table(dmin, dmax, cchalf, ccstar)
-            cc_figname = os.path.join(ARGS.outdir, ARGS.prefix + "_cc_merge_chan%d.png" % i_chan)
-            cc_merge.plot_cc(d, cchalf, ccstar, cc_figname)
-            logname = os.path.join(ARGS.outdir, "merge_chan%d.log" % i_chan)
-            with open(logname, "w") as o:
-                compute_completeness(even_f, ARGS.nbins, log_f=o, channel=i_chan)
-                compute_completeness(odd_f, ARGS.nbins, log_f=o, channel=i_chan)
-                o.write("Working directory: %s\n" % os.getcwd())
-                o.write("Command line input:\n %s\n" % " ".join(sys.argv))
-                o.write(cc_table + "\n")
-                o.write("Overall: CC1/2=%.2f, CC*=%.2f\n" % (overall_cc[0], overall_cc[1]))
+    merge_trial(ARGS.outdir, ARGS.prefix, reference=ARGS.reference, halvesOnly=ARGS.halvesOnly, nbins=ARGS.nbins)
