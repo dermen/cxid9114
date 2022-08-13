@@ -4,7 +4,7 @@ from pylab import *
 import tabulate
 
 
-def cc_merge(merge_even_f, merge_odd_f, channel=0, nbins=15, a=78.97, c=38.12):
+def cc_merge(merge_even_f, merge_odd_f, channel=0, nbins=15, a=78.97, c=38.12, dmin=2.1):
     
     h0,I0,err0, mult0 = np.load(merge_even_f, allow_pickle=True)['merge%d' % channel].T
     h1,I1,err1, mult1 = np.load(merge_odd_f, allow_pickle=True)['merge%d' % channel].T
@@ -28,7 +28,8 @@ def cc_merge(merge_even_f, merge_odd_f, channel=0, nbins=15, a=78.97, c=38.12):
     res,val0,val1= map(np.array, [all_res, all_val0, all_val1] )
     order = np.argsort(res)
     res,val0,val1 = map(lambda x: x[order], [res,val0,val1])
-    bins = [r[0] for r in np.array_split(res, nbins)] + [res[-1]]
+    res_for_bins = res[res >= dmin]
+    bins = [r[0] for r in np.array_split(res_for_bins, nbins)] + [res_for_bins[-1]]
     digs = np.digitize(res,bins)-1
     
     out = []
@@ -38,13 +39,15 @@ def cc_merge(merge_even_f, merge_odd_f, channel=0, nbins=15, a=78.97, c=38.12):
         val0_bin = val0[sel]
         val1_bin = val1[sel]
         cchalf = pearsonr(val0_bin, val1_bin)[0]
-        ccstar = np.sqrt(2*cchalf/(1+cchalf))
-        out.append( (res_bin.mean(), cchalf, ccstar, res_bin.min(), res_bin.max()))
+        ccstar = 0
+        if cchalf > 0:
+            ccstar = np.sqrt(2*cchalf/(1+cchalf))
+        out.append((res_bin.mean(), cchalf, ccstar, res_bin.min(), res_bin.max()))
 
     dspace,cchalf, ccstar, dmin, dmax = zip(*out)
 
     overall_cchalf = pearsonr(val0, val1)[0]
-    overall_cc = [overall_cchalf, np.sqrt(2*overall_cchalf/(1+overall_cchalf))]
+    overall_cc = [overall_cchalf, 0 if overall_cchalf < 0 else np.sqrt(2*overall_cchalf/(1+overall_cchalf))]
 
     return dspace, cchalf, ccstar, dmin, dmax, overall_cc
 
