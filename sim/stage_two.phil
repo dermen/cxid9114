@@ -1,0 +1,33 @@
+roi {
+  shoebox_size = 15
+  fit_tilt = True
+  fit_tilt_using_weights = False
+  reject_edge_reflections = True
+  pad_shoebox_for_background_estimation = 0
+}
+space_group=P43212
+
+sigmas {
+  G = 1
+  Fhkl = 1
+}
+
+refiner {
+  refine_Fcell = [1]
+  #refine_Nabc = [1]
+  refine_spot_scale = [1]
+  max_calls = [450]
+  ncells_mask = 000
+  tradeps = 1e-20
+  verbose = 0
+  sigma_r = 3
+  num_devices = 4
+  adu_per_photon = 28
+}
+
+simulator {
+  crystal.has_isotropic_ncells = False
+  structure_factors.mtz_name = merged/iobs_all.mtz 
+  structure_factors.mtz_column = "Iobs(+),SIGIobs(+),Iobs(-),SIGIobs(-)"
+  beam.size_mm = 0.001
+}
