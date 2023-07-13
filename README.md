@@ -299,7 +299,7 @@ refiner {
 }
 
 simulator {
-  crystal.has_isotropic_ncells = True
+  crystal.has_isotropic_ncells = False
   structure_factors.mtz_name = merged/iobs_all.mtz 
   structure_factors.mtz_column = "Iobs(+),SIGIobs(+),Iobs(-),SIGIobs(-)"
   beam.size_mm = 0.001
@@ -387,7 +387,7 @@ refiner {
   max_calls = [450]
   #sensitivity.spot_scale = 1
   #sensitivity.fcell = 1
-  ncells_mask = 111
+  ncells_mask = 000
   tradeps = 1e-20
   verbose = 0
   sigma_r = 3
@@ -395,7 +395,7 @@ refiner {
 }
 
 simulator {
-  crystal.has_isotropic_ncells = True
+  crystal.has_isotropic_ncells = False
   structure_factors.mtz_name = merged/iobs_all.mtz 
   structure_factors.mtz_column = "Iobs(+),SIGIobs(+),Iobs(-),SIGIobs(-)"
   beam.size_mm = 0.001
