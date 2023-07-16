@@ -64,5 +64,5 @@ $SRUN diffBragg.integrate  pred.phil process.phil ${ODIR}/stage1 ${ODIR}/stage1/
 sleep 30
 
 # run stage 2 ensemble refinement
-$SRUN simtbx.diffBragg.stage_two stage_two.phil io.output_dir=${ODIR}/stage2 pandas_table=stage1/predict/preds_for_hopper.pkl num_devices=4
+$SRUN simtbx.diffBragg.stage_two stage_two.phil io.output_dir=${ODIR}/stage2 pandas_table=${ODIR}/stage1/predict/preds_for_hopper.pkl num_devices=4
 
