@@ -27,7 +27,7 @@ refiner {
 
 simulator {
   crystal.has_isotropic_ncells = False
-  structure_factors.mtz_name = merged/iobs_all.mtz 
+  #structure_factors.mtz_name = merged/iobs_all.mtz
   structure_factors.mtz_column = "Iobs(+),SIGIobs(+),Iobs(-),SIGIobs(-)"
   beam.size_mm = 0.001
 }
