@@ -1,0 +1,28 @@
+# Compiled Python files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Temporary files
+.cache
+.pytest_cache
+.known-python3-violations.log
+
+# Text editor files
+*~
+*.swp
+.vscode
+
+# Mac nonsense
+.DS_Store
+
+# For git commit notifications and versioning
+.git-notifier*
+git-notifier.log
+.gitversion
+
+# Ignores stdout and stderr files:
+*.out
+*.err
+out.*
+
