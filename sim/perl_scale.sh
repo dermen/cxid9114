@@ -54,7 +54,7 @@ $SRUN diffBragg.make_input_file  ${ODIR}/indexed/ ${ODIR}/integ_exp_ref.txt --sp
 sleep 30
 
 # run per-shot refinement using hopper 
-$SRUN  hopper hopper.phil exp_ref_spec_file=${ODIR}/integ_exp_ref.txt num_devices=4 outdir=${ODIR}/stage1
+$SRUN  hopper hopper.phil exp_ref_spec_file=${ODIR}/integ_exp_ref.txt num_devices=4 outdir=${ODIR}/stage1 simulator.structure_factors.mtz_name=${ODIR}/merged/iobs_all.mtz
 
 sleep 30
 
@@ -64,5 +64,5 @@ $SRUN diffBragg.integrate  pred.phil process.phil ${ODIR}/stage1 ${ODIR}/stage1/
 sleep 30
 
 # run stage 2 ensemble refinement
-$SRUN simtbx.diffBragg.stage_two stage_two.phil io.output_dir=${ODIR}/stage2 pandas_table=${ODIR}/stage1/predict/preds_for_hopper.pkl num_devices=4
+$SRUN simtbx.diffBragg.stage_two stage_two.phil io.output_dir=${ODIR}/stage2 pandas_table=${ODIR}/stage1/predict/preds_for_hopper.pkl num_devices=4 simulator.structure_factors.mtz_name=${ODIR}/merged/iobs_all.mtz
 
