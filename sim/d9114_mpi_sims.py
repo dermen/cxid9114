@@ -314,6 +314,9 @@ for i_data in shot_range:
     if args.xtal_size_jitter is not None:
         xtal_size_mm = np.random.normal(xtal_size_mm, args.xtal_size_jitter)
 
+    if np.sum(data_fluxes)==0:
+        print("WARNING: shot has no flux. Consider adjusting --minflux argument")
+        continue
     sim_args = [crystal, DET, BEAM, data_sf, data_energies, data_fluxes]
     #print(data_energies)
     #from IPython import embed
