@@ -1,3 +1,5 @@
+method = "L-BFGS-B"
+
 roi {
   shoebox_size = 15
   fit_tilt = True
