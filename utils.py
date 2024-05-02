@@ -9,7 +9,7 @@ from scipy.signal import argrelmax, argrelmin
 import numpy as np
 from dials.array_family import flex
 from dxtbx.imageset import MemReader #, MemMasker
-from dxtbx.datablock import DataBlockFactory
+#from dxtbx.datablock import DataBlockFactory
 from dxtbx.imageset import ImageSet, ImageSetData
 from dxtbx.model.experiment_list import ExperimentListFactory
 from cctbx import sgtbx, miller
@@ -89,6 +89,7 @@ def datablock_from_numpyarrays(image, detector, beam, mask=None):
     :param beam: dxtbx beam model
     :return: datablock for the image
     """
+    raise Exception("Outdated!")
     if isinstance( image, list):
         image = np.array( image)
     if mask is not None:
