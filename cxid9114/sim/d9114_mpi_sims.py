@@ -1,5 +1,7 @@
 #!/usr/bin/env libtbx.python
 
+from simtbx.nanoBragg import shapetype, nanoBragg
+
 try:
     from mpi4py import MPI
 
@@ -103,7 +105,6 @@ import os
 import sys
 import h5py
 import numpy as np
-from simtbx.nanoBragg import shapetype, nanoBragg
 from scitbx.array_family import flex
 from dxtbx.model.crystal import CrystalFactory
 
