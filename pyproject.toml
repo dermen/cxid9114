@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxid9114"
+version = "1.0"
+dependencies = [
+    "h5py",
+    "numpy",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cxid9114*"]
+
