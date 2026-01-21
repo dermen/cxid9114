@@ -14,3 +14,7 @@ dependencies = [
 where = ["."]
 include = ["cxid9114*"]
 
+[project.scripts]
+"cxid9114.sim" = "cxid9114.sim.d9114_mpi_sims:main"
+"cxid9114.install_format" = "cxid9114.format.install_format:main"
+
